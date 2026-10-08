@@ -8,6 +8,7 @@ from . import models, schemas
 from .database import engine, get_db, SessionLocal
 from .seed import seed_database
 from . import excel_handler
+from . import resume_parser
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -798,4 +799,146 @@ def global_search(q: str, db: Session = Depends(get_db)):
                 "deadline": j.deadline,
             } for j in jds
         ],
+    }
+
+# ======================================================
+# 🆕 RESUME UPLOAD + AI PARSING
+# ======================================================
+@app.post("/api/resume/upload/{register_number}")
+async def upload_resume(
+    register_number: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    student = db.query(models.Student).filter(
+        models.Student.register_number == register_number
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if not file.filename.lower().endswith((".pdf", ".docx", ".txt")):
+        raise HTTPException(status_code=400, detail="Only PDF, DOCX, or TXT supported")
+
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+
+    try:
+        parsed = resume_parser.parse_resume(contents, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # ---- Update student record with parsed data ----
+    # Merge existing + new skills
+    existing_skills = set()
+    if student.skills:
+        existing_skills = set(s.strip() for s in student.skills.split(",") if s.strip())
+    new_skills = set(parsed["skills"])
+    all_skills = sorted(existing_skills | new_skills)
+    student.skills = ",".join(all_skills)
+
+    if parsed["cgpa"] > 0:
+        student.cgpa = parsed["cgpa"]
+    if parsed["email"] and not student.email:
+        student.email = parsed["email"]
+
+    db.commit()
+    db.refresh(student)
+
+    return {
+        "message": "Resume parsed successfully",
+        "student_name": student.name,
+        "register_number": student.register_number,
+        "skills_found": parsed["skills"],
+        "total_skills_after_merge": all_skills,
+        "cgpa": student.cgpa,
+        "email": student.email,
+        "phone": parsed["phone"],
+        "skills_added_count": len(new_skills - existing_skills),
+        "raw_text_length": parsed["raw_text_length"],
+    }
+
+
+# ======================================================
+# 🆕 AI SHORTLISTING — Rank students for a JD
+# ======================================================
+@app.post("/api/match/ai-shortlist/{jd_id}")
+def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
+    """
+    AI-powered shortlisting engine.
+    Scores each student on:
+      - Skill match % (0-60 points)
+      - CGPA weight (0-25 points)
+      - Readiness score (0-15 points)
+    Returns ranked list with recommendation tiers.
+    """
+    jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
+    if not jd:
+        raise HTTPException(status_code=404, detail="JD not found")
+
+    jd_skills = [s.strip().lower() for s in jd.actionable_skills.split(",") if s.strip()]
+    if not jd_skills:
+        return {"jd": jd.company_name, "recommended": [], "all_ranked": []}
+
+    students = db.query(models.Student).all()
+    ranked = []
+
+    for student in students:
+        student_skills = [s.strip().lower() for s in (student.skills or "").split(",") if s.strip()]
+
+        # ---- 1. Skill match (60 points max) ----
+        matched = [s for s in jd_skills if s in student_skills]
+        missing = [s for s in jd_skills if s not in student_skills]
+        skill_match_pct = (len(matched) / len(jd_skills)) * 100 if jd_skills else 0
+        skill_score = (skill_match_pct / 100) * 60
+
+        # ---- 2. CGPA weight (25 points max) ----
+        cgpa = student.cgpa or 0
+        cgpa_score = min(25, (cgpa / 10) * 25)
+
+        # ---- 3. Readiness score (15 points max) ----
+        readiness = max(0, 100 - (len(missing) * 20))
+        readiness_score = (readiness / 100) * 15
+
+        total = round(skill_score + cgpa_score + readiness_score, 1)
+
+        # ---- Recommendation tier ----
+        if total >= 80 and len(missing) == 0:
+            tier = "Strongly Recommended"
+        elif total >= 65:
+            tier = "Recommended"
+        elif total >= 50:
+            tier = "Consider"
+        else:
+            tier = "Not Recommended"
+
+        ranked.append({
+            "student_id": student.id,
+            "name": student.name,
+            "register_number": student.register_number,
+            "department": student.department,
+            "cgpa": cgpa,
+            "skills": [s.strip() for s in (student.skills or "").split(",") if s.strip()],
+            "matched_skills": [s.strip() for s in matched],
+            "missing_skills": [s.strip() for s in missing],
+            "skill_match_pct": round(skill_match_pct, 1),
+            "ai_score": total,
+            "tier": tier,
+        })
+
+    # Sort by AI score descending
+    ranked.sort(key=lambda x: x["ai_score"], reverse=True)
+
+    # Only include Recommendable candidates in the top list
+    recommended = [r for r in ranked if r["tier"] in ("Strongly Recommended", "Recommended")]
+
+    return {
+        "jd_id": jd.id,
+        "company_name": jd.company_name,
+        "role": jd.role,
+        "required_skills": jd_skills,
+        "total_students": len(students),
+        "recommended_count": len(recommended),
+        "recommended": recommended,
+        "all_ranked": ranked,
     }
