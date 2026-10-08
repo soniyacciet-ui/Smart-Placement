@@ -742,3 +742,60 @@ def delete_import_history_record(
     db.delete(record)
     db.commit()
     return {"message": "Import history record deleted"}
+
+# ======================================================
+# 🆕 GLOBAL SEARCH
+# ======================================================
+@app.get("/api/search")
+def global_search(q: str, db: Session = Depends(get_db)):
+    if not q or len(q.strip()) < 2:
+        return {"students": [], "users": [], "jds": []}
+
+    term = f"%{q.strip()}%"
+
+    # Search students (by name or register number)
+    students = db.query(models.Student).filter(
+        (models.Student.name.ilike(term)) |
+        (models.Student.register_number.ilike(term))
+    ).limit(5).all()
+
+    # Search users (by name, login_id, or email)
+    users = db.query(models.User).filter(
+        (models.User.name.ilike(term)) |
+        (models.User.login_id.ilike(term)) |
+        (models.User.email.ilike(term))
+    ).limit(5).all()
+
+    # Search JDs (by company or role)
+    jds = db.query(models.JobDescription).filter(
+        (models.JobDescription.company_name.ilike(term)) |
+        (models.JobDescription.role.ilike(term))
+    ).limit(5).all()
+
+    return {
+        "students": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "register_number": s.register_number,
+                "department": s.department,
+            } for s in students
+        ],
+        "users": [
+            {
+                "id": u.id,
+                "name": u.name,
+                "login_id": u.login_id,
+                "role": u.role,
+                "department": u.department,
+            } for u in users
+        ],
+        "jds": [
+            {
+                "id": j.id,
+                "company_name": j.company_name,
+                "role": j.role,
+                "deadline": j.deadline,
+            } for j in jds
+        ],
+    }

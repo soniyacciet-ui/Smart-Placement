@@ -294,3 +294,13 @@ export const deleteImportHistoryRecord = async (historyId, userRole, userDept) =
     },
   });
 };
+
+// ============================================
+// 🆕 GLOBAL SEARCH
+// ============================================
+export const globalSearch = async (query) => {
+  if (!query || query.trim().length < 2) {
+    return { students: [], users: [], jds: [] };
+  }
+  return await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
+};

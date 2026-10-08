@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Form, Button, Row, Col, Alert, Spinner } from 'react-bootstrap';
 import PageHeader from '../components/ui/PageHeader';
+import PasswordStrength from '../components/ui/PasswordStrength';
 import { createUser } from '../services/mockApi';
 
 const CreateUser = () => {
@@ -22,6 +23,18 @@ const CreateUser = () => {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    // Password validation
+    const pwd = form.password;
+    if (pwd.length < 8) {
+      setError('Password must be at least 8 characters long');
+      return;
+    }
+    if (!/[A-Z]/.test(pwd) || !/[a-z]/.test(pwd) || !/[0-9]/.test(pwd)) {
+      setError('Password must contain uppercase, lowercase, and a number');
+      return;
+    }
+
     setLoading(true);
     try {
       await createUser(form, 'Admin');
@@ -94,10 +107,13 @@ const CreateUser = () => {
                     name="password"
                     value={form.password}
                     onChange={handleChange}
-                    placeholder="Temporary password"
+                    placeholder="Min 8 chars, mixed case, number, symbol"
                     required
                   />
-                  <Form.Text className="text-muted">Share this with the user — they can change later</Form.Text>
+                  <PasswordStrength password={form.password} />
+                  <Form.Text className="text-muted">
+                    Share this with the user — they can change it after first login
+                  </Form.Text>
                 </Form.Group>
               </Col>
               <Col md={3}>

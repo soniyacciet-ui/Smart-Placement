@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { FiBell, FiSearch, FiUser, FiMenu, FiChevronDown } from 'react-icons/fi';
+import GlobalSearch from './GlobalSearch';
 
 const Topbar = ({ toggleSidebar }) => {
   const { user } = useApp();
@@ -29,24 +30,7 @@ const Topbar = ({ toggleSidebar }) => {
           <FiMenu size={18} />
         </button>
 
-        <div className="position-relative d-none d-md-block">
-          <FiSearch
-            className="position-absolute text-muted"
-            style={{ left: '14px', top: '50%', transform: 'translateY(-50%)', fontSize: '15px' }}
-          />
-          <input
-            type="text"
-            className="form-control ps-5"
-            placeholder="Search drives, students, companies..."
-            style={{
-              width: '340px',
-              height: '38px',
-              backgroundColor: 'var(--slate-100)',
-              border: '1px solid transparent',
-              fontSize: '0.85rem',
-            }}
-          />
-        </div>
+       <GlobalSearch />
       </div>
 
       <div className="d-flex align-items-center gap-2">

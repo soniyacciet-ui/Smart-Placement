@@ -6,6 +6,8 @@ import PageHeader from '../components/ui/PageHeader';
 import MetricCard from '../components/ui/MetricCard';
 import { fetchAdminStats } from '../services/mockApi';
 import { deleteDepartmentStudents } from '../services/mockApi';
+import { exportAnalyticsPDF } from '../utils/exportPDF';
+import { FiDownload } from 'react-icons/fi';
 const AdminDashboard = () => {
     const navigate = useNavigate();
     const [stats, setStats] = useState(null);
@@ -37,6 +39,43 @@ const AdminDashboard = () => {
                 subtitle="System-wide overview of users, departments, and student data."
                 actions={
                     <>
+                        <Button
+                            variant="outline-success"
+                            className="me-2"
+                            onClick={() => {
+                                exportAnalyticsPDF({
+                                    title: 'DRIVE-X Admin Report',
+                                    subtitle: `${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+                                    metrics: [
+                                        { title: 'Total Students', value: stats.total_students },
+                                        { title: 'Total Staff', value: stats.total_staff },
+                                        { title: 'HODs', value: stats.total_hods },
+                                        { title: 'Placement Officers', value: stats.total_placement_officers },
+                                        { title: 'Departments', value: stats.total_departments },
+                                        { title: 'Active Users', value: stats.active_users },
+                                        { title: 'Inactive Users', value: stats.inactive_users },
+                                    ],
+                                    tables: [
+                                        {
+                                            title: 'Department-wise Students',
+                                            headers: ['Department', 'Student Count'],
+                                            data: Object.entries(stats.department_counts).map(([d, c]) => [d, c]),
+                                        },
+                                    ],
+                                    sections: [
+                                        {
+                                            title: 'Summary',
+                                            content:
+                                                `This report covers ${stats.total_students} students across ${stats.total_departments} departments. ` +
+                                                `Currently ${stats.active_users} users are active and ${stats.inactive_users} are inactive. ` +
+                                                `The system manages ${stats.total_staff} staff, ${stats.total_hods} HODs, and ${stats.total_placement_officers} placement officers.`,
+                                        },
+                                    ],
+                                });
+                            }}
+                        >
+                            <FiDownload className="me-2" /> Export Report
+                        </Button>
                         <Button variant="outline-primary" className="me-2" onClick={() => navigate('/admin/users')}>
                             <FiUsers className="me-2" /> Manage Users
                         </Button>
@@ -46,7 +85,6 @@ const AdminDashboard = () => {
                     </>
                 }
             />
-
             <Row className="g-3 mb-4">
                 <Col md={6} lg={3}><MetricCard title="Total Students" value={stats.total_students} icon={<FiUsers />} color="primary" /></Col>
                 <Col md={6} lg={3}><MetricCard title="Total Staff" value={stats.total_staff} icon={<FiUserCheck />} color="info" /></Col>

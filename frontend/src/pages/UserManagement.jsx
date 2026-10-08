@@ -4,6 +4,8 @@ import { Card, Table, Button, Form, Row, Col, Spinner, Alert, Badge } from 'reac
 import { FiPlus, FiFilter } from 'react-icons/fi';
 import PageHeader from '../components/ui/PageHeader';
 import StatusBadge from '../components/ui/StatusBadge';
+import Pagination from '../components/ui/Pagination';
+import { usePagination } from '../hooks/usePagination';
 import { listUsers, toggleUserStatus } from '../services/mockApi';
 
 const UserManagement = () => {
@@ -12,6 +14,11 @@ const UserManagement = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filters, setFilters] = useState({ role: '', department: '', status: '' });
+
+  const {
+    currentPage, totalPages, paginatedItems,
+    goToPage, startIndex, endIndex, totalItems,
+  } = usePagination(users, 8);
 
   const loadUsers = async () => {
     setLoading(true);
@@ -101,44 +108,54 @@ const UserManagement = () => {
           ) : users.length === 0 ? (
             <div className="text-center py-5 text-muted">No users found. Create one to get started.</div>
           ) : (
-            <Table hover responsive className="mb-0">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Login ID</th>
-                  <th>Role</th>
-                  <th>Department</th>
-                  <th>Email</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id}>
-                    <td className="fw-semibold">{u.name || '—'}</td>
-                    <td className="text-muted">{u.login_id || '—'}</td>
-                    <td>
-                      <Badge bg={u.role === 'Admin' ? 'danger' : u.role === 'HOD/Admin' ? 'warning' : 'info'}>
-                        {u.role}
-                      </Badge>
-                    </td>
-                    <td>{u.department || '—'}</td>
-                    <td className="text-muted" style={{ fontSize: '0.85rem' }}>{u.email}</td>
-                    <td><StatusBadge status={u.status} /></td>
-                    <td>
-                      <Button
-                        size="sm"
-                        variant={u.status === 'Active' ? 'outline-danger' : 'outline-success'}
-                        onClick={() => handleToggle(u.id, u.status)}
-                      >
-                        {u.status === 'Active' ? 'Deactivate' : 'Activate'}
-                      </Button>
-                    </td>
+            <>
+              <Table hover responsive className="mb-0">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Login ID</th>
+                    <th>Role</th>
+                    <th>Department</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </Table>
+                </thead>
+                <tbody>
+                  {paginatedItems.map(u => (
+                    <tr key={u.id}>
+                      <td className="fw-semibold">{u.name || '—'}</td>
+                      <td className="text-muted">{u.login_id || '—'}</td>
+                      <td>
+                        <Badge bg={u.role === 'Admin' ? 'danger' : u.role === 'HOD/Admin' ? 'warning' : 'info'}>
+                          {u.role}
+                        </Badge>
+                      </td>
+                      <td>{u.department || '—'}</td>
+                      <td className="text-muted" style={{ fontSize: '0.85rem' }}>{u.email}</td>
+                      <td><StatusBadge status={u.status} /></td>
+                      <td>
+                        <Button
+                          size="sm"
+                          variant={u.status === 'Active' ? 'outline-danger' : 'outline-success'}
+                          onClick={() => handleToggle(u.id, u.status)}
+                        >
+                          {u.status === 'Active' ? 'Deactivate' : 'Activate'}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                goToPage={goToPage}
+                startIndex={startIndex}
+                endIndex={endIndex}
+                totalItems={totalItems}
+              />
+            </>
           )}
         </Card.Body>
       </Card>
