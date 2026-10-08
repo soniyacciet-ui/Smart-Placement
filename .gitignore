@@ -1,15 +1,36 @@
-# Dependencies
+# ==================
+# FRONTEND
+# ==================
 frontend/node_modules/
 node_modules/
-
-# Builds
 frontend/dist/
 dist/
 
-# Environment
+# ==================
+# BACKEND
+# ==================
+backend/venv/
+backend/__pycache__/
+backend/*.db
+backend/*.sqlite3
+backend/.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ==================
+# ENVIRONMENT
+# ==================
 .env
 .env.local
+.env.*.local
 
-# System
+# ==================
+# SYSTEM
+# ==================
 .DS_Store
 Thumbs.db
+*.log
+npm-debug.log*
