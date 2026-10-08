@@ -1,0 +1,15 @@
+# Dependencies
+frontend/node_modules/
+node_modules/
+
+# Builds
+frontend/dist/
+dist/
+
+# Environment
+.env
+.env.local
+
+# System
+.DS_Store
+Thumbs.db
