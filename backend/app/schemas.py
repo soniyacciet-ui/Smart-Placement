@@ -133,7 +133,8 @@ class ImportPreviewRow(BaseModel):
     email: Optional[str] = None
     cgpa: Optional[float] = None
     department: Optional[str] = None
-    status: str                  # Valid / Invalid / Duplicate / Update
+    skills: Optional[str] = None
+    status: str
     reason: Optional[str] = None
 
 

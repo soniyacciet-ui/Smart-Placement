@@ -254,3 +254,43 @@ export const fetchImportHistory = async (userRole, userDept) => {
 export const fetchTemplateInfo = async () => {
   return await apiFetch('/api/import/template-info');
 };
+
+// ============================================
+// 🆕 DELETE OPERATIONS
+// ============================================
+export const deleteDepartmentStudents = async (department, adminRole = 'Admin') => {
+  return await apiFetch(`/api/admin/students/department/${department}`, {
+    method: 'DELETE',
+    headers: { 'x-user-role': adminRole },
+  });
+};
+
+export const deleteImportHistory = async (historyId, adminRole = 'Admin') => {
+  return await apiFetch(`/api/admin/import-history/${historyId}`, {
+    method: 'DELETE',
+    headers: { 'x-user-role': adminRole },
+  });
+};
+
+// ============================================
+// 🆕 CLEAR DEPARTMENT STUDENTS (Staff + Admin)
+// ============================================
+export const clearDepartmentStudents = async (department, userRole, userDept) => {
+  return await apiFetch(`/api/import/clear-department/${department}`, {
+    method: 'DELETE',
+    headers: {
+      'x-user-role': userRole,
+      'x-user-department': userDept || '',
+    },
+  });
+};
+
+export const deleteImportHistoryRecord = async (historyId, userRole, userDept) => {
+  return await apiFetch(`/api/import/history/${historyId}`, {
+    method: 'DELETE',
+    headers: {
+      'x-user-role': userRole,
+      'x-user-department': userDept || '',
+    },
+  });
+};

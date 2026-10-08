@@ -640,3 +640,105 @@ def template_info():
         },
         "supported_departments": ["AIDS", "CSE", "ECE", "MECH", "CIVIL", "IT"],
     }
+
+# ======================================================
+# 🆕 DELETE STUDENTS
+# ======================================================
+@app.delete("/api/admin/students/{student_id}")
+def delete_student(
+    student_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    _require_admin(x_user_role)
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    db.delete(student)
+    db.commit()
+    return {"message": f"Student {student.name} deleted"}
+
+
+@app.delete("/api/admin/students/department/{department}")
+def delete_department_students(
+    department: str,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    _require_admin(x_user_role)
+    deleted = db.query(models.Student).filter(models.Student.department == department.upper()).delete()
+    db.commit()
+    return {"message": f"Deleted {deleted} students from {department.upper()}"}
+
+
+@app.delete("/api/admin/import-history/{history_id}")
+def delete_import_history(
+    history_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    _require_admin(x_user_role)
+    record = db.query(models.ImportHistory).filter(models.ImportHistory.id == history_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="History record not found")
+    db.delete(record)
+    db.commit()
+    return {"message": "History record deleted"}
+
+# ======================================================
+# 🆕 CLEAR DEPARTMENT STUDENTS (Staff + Admin)
+# ======================================================
+@app.delete("/api/import/clear-department/{department}")
+def clear_department_students(
+    department: str,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+    x_user_department: Optional[str] = Header(None),
+):
+    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
+    if x_user_role not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Non-admin users can only clear their own department
+    if x_user_role != "Admin":
+        if not x_user_department or department.upper() != x_user_department.upper():
+            raise HTTPException(
+                status_code=403,
+                detail=f"You can only clear students from {x_user_department}"
+            )
+
+    deleted = db.query(models.Student).filter(
+        models.Student.department == department.upper()
+    ).delete()
+    db.commit()
+    return {
+        "message": f"Deleted {deleted} students from {department.upper()}",
+        "deleted_count": deleted,
+    }
+
+
+# ======================================================
+# 🆕 DELETE IMPORT HISTORY RECORD (Staff + Admin)
+# ======================================================
+@app.delete("/api/import/history/{history_id}")
+def delete_import_history_record(
+    history_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+    x_user_department: Optional[str] = Header(None),
+):
+    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
+    if x_user_role not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    record = db.query(models.ImportHistory).filter(models.ImportHistory.id == history_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Import history record not found")
+
+    if x_user_role != "Admin" and x_user_department:
+        if record.department != x_user_department:
+            raise HTTPException(status_code=403, detail="Not authorized for this department")
+
+    db.delete(record)
+    db.commit()
+    return {"message": "Import history record deleted"}

@@ -4,21 +4,21 @@ Validates .xlsx files and returns structured preview data.
 """
 import io
 import uuid
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 from . import models
 
 
-# In-memory store for preview sessions (temp storage between preview → confirm)
-# In production, use Redis or a DB table. For DRIVE-X, in-memory is fine.
+# In-memory preview cache (token → preview data)
 PREVIEW_CACHE: Dict[str, dict] = {}
 
 
+# Column names required in Excel (lowercase with underscores)
 REQUIRED_COLUMNS = ["name", "register_number", "email", "cgpa", "department"]
 
 
-def _normalize_header(h: str) -> str:
+def _normalize_header(h) -> str:
     """Convert 'Register Number' → 'register_number'"""
     return str(h).strip().lower().replace(" ", "_")
 
@@ -34,7 +34,6 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
     except Exception as e:
         raise ValueError(f"Could not read Excel file: {e}")
 
-    # ---- Read header row ----
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         raise ValueError("Excel file is empty")
@@ -46,15 +45,17 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
     col_index = {name: header.index(name) for name in REQUIRED_COLUMNS}
+    # Skills is optional
+    skills_idx = header.index("skills") if "skills" in header else None
 
-    # ---- Fetch existing students in this department ----
+    # Existing students in this department
     existing = {
         s.register_number: s
         for s in db.query(models.Student).filter(models.Student.department == department).all()
         if s.register_number
     }
 
-    # ---- Also fetch ALL students globally (to prevent cross-dept duplicate reg numbers) ----
+    # All students globally (to prevent cross-dept duplicate register numbers)
     global_existing = {
         s.register_number: s
         for s in db.query(models.Student).all()
@@ -71,7 +72,7 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
     new_students = 0
     updated_students = 0
 
-    for row_idx, raw_row in enumerate(rows[1:], start=2):  # Start at row 2 (Excel row numbers)
+    for row_idx, raw_row in enumerate(rows[1:], start=2):
         # Skip fully empty rows
         if not raw_row or all(c is None or str(c).strip() == "" for c in raw_row):
             continue
@@ -88,8 +89,15 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
         cgpa_raw = get("cgpa")
         dept = str(get("department") or "").strip().upper() or department.upper()
 
-        # ---- Validate row ----
+        # Skills (optional)
+        skills_raw = ""
+        if skills_idx is not None and skills_idx < len(raw_row):
+            skills_raw = str(raw_row[skills_idx] or "").strip()
+        skills_clean = ",".join([s.strip() for s in skills_raw.split(",") if s.strip()])
+
+        # Validation
         error = None
+        cgpa_val = None
         if not name:
             error = "Missing Name"
         elif not reg_no:
@@ -100,22 +108,22 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
             error = "Missing CGPA"
         else:
             try:
-                cgpa = float(cgpa_raw)
-                if cgpa < 0 or cgpa > 10:
+                cgpa_val = float(cgpa_raw)
+                if cgpa_val < 0 or cgpa_val > 10:
                     error = "CGPA must be between 0 and 10"
             except (ValueError, TypeError):
                 error = "Invalid CGPA"
 
-        # ---- Department check ----
+        # Department check
         if not error and dept.upper() != department.upper():
             error = f"Department mismatch (row: {dept}, expected: {department})"
 
-        # ---- Duplicate within file ----
+        # Duplicate within file
         if not error and reg_no in seen_in_file:
             error = "Duplicate Register Number in Excel"
             duplicates += 1
 
-        # ---- Row status ----
+        # Invalid row
         if error:
             invalid += 1
             preview_rows.append({
@@ -123,17 +131,18 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
                 "name": name or None,
                 "register_number": reg_no or None,
                 "email": email or None,
-                "cgpa": float(cgpa_raw) if isinstance(cgpa_raw, (int, float)) else None,
+                "cgpa": cgpa_val,
                 "department": dept,
+                "skills": skills_clean,
                 "status": "Invalid",
                 "reason": error,
             })
             continue
 
-        # ---- Check existing in DB ----
+        # Check DB
         seen_in_file.add(reg_no)
         if reg_no in global_existing:
-            # Registered elsewhere (cross-department) → reject
+            # Belongs to another department
             if global_existing[reg_no].department != department:
                 invalid += 1
                 preview_rows.append({
@@ -141,27 +150,29 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
                     "name": name,
                     "register_number": reg_no,
                     "email": email,
-                    "cgpa": float(cgpa_raw),
+                    "cgpa": cgpa_val,
                     "department": dept,
+                    "skills": skills_clean,
                     "status": "Invalid",
                     "reason": f"Register Number belongs to {global_existing[reg_no].department}",
                 })
                 continue
 
-            # Registered in this dept → UPDATE
+            # Existing in this department → UPDATE
             updated_students += 1
             preview_rows.append({
                 "row_number": row_idx,
                 "name": name,
                 "register_number": reg_no,
                 "email": email,
-                "cgpa": float(cgpa_raw),
+                "cgpa": cgpa_val,
                 "department": dept,
+                "skills": skills_clean,
                 "status": "Update",
                 "reason": "Existing student will be updated",
             })
         else:
-            # Brand new student
+            # New student
             new_students += 1
             valid += 1
             preview_rows.append({
@@ -169,18 +180,18 @@ def parse_and_validate(file_bytes: bytes, department: str, db: Session) -> dict:
                 "name": name,
                 "register_number": reg_no,
                 "email": email,
-                "cgpa": float(cgpa_raw),
+                "cgpa": cgpa_val,
                 "department": dept,
+                "skills": skills_clean,
                 "status": "Valid",
                 "reason": None,
             })
 
-    # ---- Cache the preview for confirm step ----
+    # Cache preview for the confirm step
     token = str(uuid.uuid4())
     PREVIEW_CACHE[token] = {
         "department": department,
         "rows": preview_rows,
-        "file_name": None,
     }
 
     return {
@@ -229,20 +240,18 @@ def commit_import(token: str, db: Session) -> dict:
             reg_no = row["register_number"]
 
             if status == "Valid":
-                # New student
                 new_student = models.Student(
                     name=row["name"],
                     register_number=reg_no,
                     email=row["email"],
                     cgpa=row["cgpa"],
                     department=department,
-                    skills="",  # to be filled later
+                    skills=row.get("skills", ""),
                 )
                 db.add(new_student)
                 inserted += 1
 
             elif status == "Update":
-                # Update existing
                 student = db.query(models.Student).filter(
                     models.Student.register_number == reg_no
                 ).first()
@@ -251,16 +260,16 @@ def commit_import(token: str, db: Session) -> dict:
                     student.email = row["email"]
                     student.cgpa = row["cgpa"]
                     student.department = department
+                    student.skills = row.get("skills", "")
                     updated += 1
                 else:
-                    # Row was marked Update but student no longer exists → treat as insert
                     new_student = models.Student(
                         name=row["name"],
                         register_number=reg_no,
                         email=row["email"],
                         cgpa=row["cgpa"],
                         department=department,
-                        skills="",
+                        skills=row.get("skills", ""),
                     )
                     db.add(new_student)
                     inserted += 1
