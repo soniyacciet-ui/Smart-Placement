@@ -4,7 +4,6 @@ import { AppProvider, useApp } from './context/AppContext';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Layout from './components/Layout';
 
-// Loose files in src/pages/
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import JDUpload from './pages/JDUpload';
@@ -21,16 +20,17 @@ import LearningLoop from './pages/LearningLoop';
 import RecruiterMemory from './pages/RecruiterMemory';
 import Verification from './pages/Verification';
 import DriveExecution from './pages/DriveExecution';
-
-// File inside Module5_Learn folder (only exists there)
 import CurriculumGap from './pages/CurriculumGap';
+import AdminDashboard from './pages/AdminDashboard';
+import UserManagement from './pages/UserManagement';
+import CreateUser from './pages/CreateUser';
+import ExcelImport from './pages/ExcelImport';
+import ImportHistory from './pages/ImportHistory';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user } = useApp();
   if (!user) return <Navigate to="/" replace />;
-  
   const normalizedRole = user.role === 'Faculty/Trainer' ? 'Trainer' : user.role === 'HOD/Admin' ? 'Admin' : user.role;
-  
   if (allowedRoles && !allowedRoles.includes(normalizedRole)) {
     return <Navigate to="/dashboard" replace />;
   }
@@ -51,26 +51,27 @@ function AppRoutes() {
         <Layout>
           <Routes>
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            
             <Route path="/jd-upload" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin']}><JDUpload /></ProtectedRoute>} />
             <Route path="/resume-upload" element={<ProtectedRoute allowedRoles={['Student']}><ResumeUpload /></ProtectedRoute>} />
-            
             <Route path="/segmentation" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><Segmentation /></ProtectedRoute>} />
             <Route path="/blockers" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><BlockerFingerprint /></ProtectedRoute>} />
-            
             <Route path="/recovery" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin']}><Recovery /></ProtectedRoute>} />
             <Route path="/simulator" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><Simulator /></ProtectedRoute>} />
             <Route path="/optimizer" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><Optimizer /></ProtectedRoute>} />
             <Route path="/plan" element={<ProtectedRoute allowedRoles={['Student']}><InterventionPlan /></ProtectedRoute>} />
             <Route path="/why-not-me" element={<ProtectedRoute allowedRoles={['Student']}><WhyNotMe /></ProtectedRoute>} />
-            
             <Route path="/recruiter-memory" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Recruiter']}><RecruiterMemory /></ProtectedRoute>} />
             <Route path="/verification" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin']}><Verification /></ProtectedRoute>} />
             <Route path="/drive-execution" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Recruiter']}><DriveExecution /></ProtectedRoute>} />
-            
             <Route path="/learning-loop" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><LearningLoop /></ProtectedRoute>} />
             <Route path="/missed-opportunity" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin']}><MissedOpportunity /></ProtectedRoute>} />
             <Route path="/curriculum-gap" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><CurriculumGap /></ProtectedRoute>} />
+
+            <Route path="/admin" element={<ProtectedRoute allowedRoles={['Admin']}><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/admin/users" element={<ProtectedRoute allowedRoles={['Admin']}><UserManagement /></ProtectedRoute>} />
+            <Route path="/admin/create-user" element={<ProtectedRoute allowedRoles={['Admin']}><CreateUser /></ProtectedRoute>} />
+            <Route path="/admin/import" element={<ProtectedRoute allowedRoles={['Admin', 'HOD/Admin', 'Faculty/Trainer', 'Placement Officer']}><ExcelImport /></ProtectedRoute>} />
+            <Route path="/admin/import-history" element={<ProtectedRoute allowedRoles={['Admin', 'HOD/Admin', 'Faculty/Trainer', 'Placement Officer']}><ImportHistory /></ProtectedRoute>} />
           </Routes>
         </Layout>
       )}

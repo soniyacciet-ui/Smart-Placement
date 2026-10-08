@@ -1,107 +1,256 @@
-// Simulates the FastAPI backend logic
-export const mockRunMatching = (jd, students) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const jdSkills = jd.actionable_skills.split(',').map(s => s.trim());
-      const results = students.map(student => {
-        const missingSkills = jdSkills.filter(skill => !student.skills.includes(skill));
-        let status = 'Ready';
-        
-        if (missingSkills.length > 0 && missingSkills.length <= 2) {
-          status = 'Recoverable';
-        } else if (missingSkills.length > 2) {
-          status = 'Blocked';
-        }
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-        return {
-          ...student,
-          status,
-          missingSkills,
-          readinessScore: Math.max(0, 100 - (missingSkills.length * 20))
-        };
-      });
-      resolve(results);
-    }, 1500); 
+// ============================================
+// HELPER
+// ============================================
+const apiFetch = async (path, options = {}) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`API Error ${response.status}: ${error}`);
+  }
+  return response.json();
+};
+
+// ============================================
+// HEALTH
+// ============================================
+export const testBackendConnection = async () => {
+  try {
+    const data = await apiFetch('/api/health');
+    console.log('✅ Connected to Backend:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Backend connection failed:', error);
+    return null;
+  }
+};
+
+// ============================================
+// MATCHING (existing — unchanged)
+// ============================================
+export const mockRunMatching = async (jd, students) => {
+  try {
+    const createdJD = await apiFetch('/api/jd/upload', {
+      method: 'POST',
+      body: JSON.stringify(jd),
+    });
+
+    await apiFetch(`/api/match/run/${createdJD.id}`, { method: 'POST' });
+    const segments = await apiFetch(`/api/match/${createdJD.id}/segments`);
+
+    return segments.map(s => ({
+      ...s,
+      missingSkills: s.missing_skills,
+      readinessScore: s.readiness_score,
+    }));
+  } catch (error) {
+    console.error('❌ Backend connection failed:', error);
+    throw error;
+  }
+};
+
+// ============================================
+// RECOVERY (existing — unchanged)
+// ============================================
+export const mockRunRecovery = async (matchResults, jdId = 1) => {
+  try {
+    const response = await apiFetch(`/api/recovery/run/${jdId}`, { method: 'POST' });
+    const updatedResults = matchResults.map(student => {
+      const serverResult = response.results.find(r => r.id === student.id);
+      if (!serverResult) return student;
+      return {
+        ...student,
+        status: serverResult.status,
+        readinessScore: serverResult.readiness_score,
+        recovered: serverResult.recovered,
+        originalStatus: serverResult.original_status,
+      };
+    });
+    return updatedResults;
+  } catch (error) {
+    console.error('❌ Recovery failed:', error);
+    throw error;
+  }
+};
+
+// ============================================
+// SIMULATOR (existing — unchanged)
+// ============================================
+export const mockRunSimulator = async (selectedInterventionIds, matchResults, interventions, jdId = 1) => {
+  try {
+    const response = await apiFetch('/api/simulator/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        jd_id: jdId,
+        selected_intervention_ids: selectedInterventionIds,
+      }),
+    });
+
+    const transformedResults = matchResults.map(student => {
+      const sim = response.results.find(r => r.id === student.id);
+      if (!sim) return { ...student, moveToReady: false };
+      return {
+        ...student,
+        simulatedScore: sim.simulated_score,
+        moveToReady: sim.move_to_ready,
+      };
+    });
+
+    return { results: transformedResults, totalMoved: response.total_moved };
+  } catch (error) {
+    console.error('❌ Simulator failed:', error);
+    throw error;
+  }
+};
+
+// ============================================
+// OPTIMIZER (existing — unchanged)
+// ============================================
+export const mockRunOptimizer = async (constraints, matchResults, interventions, jdId = 1) => {
+  try {
+    const response = await apiFetch('/api/optimizer/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        jd_id: jdId,
+        max_budget: constraints.maxBudget,
+        max_trainers: constraints.maxTrainers,
+      }),
+    });
+    return {
+      recommendedPlan: response.recommended_plan,
+      totalCost: response.total_cost,
+      totalTrainers: response.total_trainers,
+    };
+  } catch (error) {
+    console.error('❌ Optimizer failed:', error);
+    throw error;
+  }
+};
+
+// ============================================
+// 🆕 STUDENTS
+// ============================================
+export const fetchStudents = async () => {
+  return await apiFetch('/api/students');
+};
+
+export const fetchMyProfile = async (registerNumber) => {
+  return await apiFetch(`/api/students/me/${registerNumber}`);
+};
+
+// ============================================
+// 🆕 ADMIN — USER MANAGEMENT
+// ============================================
+export const createUser = async (userData, adminRole = 'Admin') => {
+  return await apiFetch('/api/admin/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': adminRole,
+    },
+    body: JSON.stringify(userData),
   });
 };
 
-export const mockRunRecovery = (matchResults) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      let recoveredCount = 0;
-      const recovered = matchResults.map(student => {
-        if (student.status === 'Recoverable') {
-          // Simulate recovery: assume training fixes 1 missing skill
-          const newScore = Math.min(100, student.readinessScore + 25);
-          // If score crosses 80, they become Ready
-          const newStatus = newScore >= 80 ? 'Ready' : 'Recoverable';
-          
-          if (newStatus === 'Ready') recoveredCount++;
-          
-          return { 
-            ...student, 
-            originalStatus: student.status,
-            readinessScore: newScore, 
-            status: newStatus, 
-            recovered: newStatus === 'Ready' 
-          };
-        }
-        return { ...student, originalStatus: student.status, recovered: false };
-      });
-      resolve({ results: recovered, recoveredCount });
-    }, 1000);
+export const listUsers = async (filters = {}, adminRole = 'Admin') => {
+  const params = new URLSearchParams();
+  if (filters.role) params.append('role', filters.role);
+  if (filters.department) params.append('department', filters.department);
+  if (filters.status) params.append('status', filters.status);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  return await apiFetch(`/api/admin/users${query}`, {
+    headers: { 'x-user-role': adminRole },
   });
 };
 
-// Step 9: What-if Intervention Simulator
-export const mockRunSimulator = (selectedInterventionIds, matchResults, interventions) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const selectedInterventions = interventions.filter(i => selectedInterventionIds.includes(i.id));
-      
-      const simulatedResults = matchResults.map(student => {
-        if (student.status !== 'Recoverable') return { ...student, moveToReady: false };
-
-        let newScore = student.readinessScore;
-        let missingSkills = [...student.missingSkills];
-
-        selectedInterventions.forEach(intervention => {
-          if (missingSkills.includes(intervention.targetSkill)) {
-            newScore = Math.min(100, newScore + intervention.impact);
-            missingSkills = missingSkills.filter(s => s !== intervention.targetSkill);
-          }
-        });
-
-        const moveToReady = newScore >= 80;
-        return { ...student, simulatedScore: newScore, simulatedMissing: missingSkills, moveToReady };
-      });
-
-      const totalMoved = simulatedResults.filter(s => s.moveToReady).length;
-      resolve({ results: simulatedResults, totalMoved });
-    }, 800);
+export const toggleUserStatus = async (userId, status, adminRole = 'Admin') => {
+  return await apiFetch(`/api/admin/users/${userId}/status`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': adminRole,
+    },
+    body: JSON.stringify({ status }),
   });
 };
 
-// Step 10: Training Resource Optimizer
-export const mockRunOptimizer = (constraints, matchResults, interventions) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const { maxBudget, maxTrainers } = constraints;
-      let currentBudget = 0;
-      let currentTrainers = 0;
-      const recommendedPlan = [];
-
-      const sortedInterventions = [...interventions].sort((a, b) => (b.impact / b.cost) - (a.impact / a.cost));
-
-      for (const intervention of sortedInterventions) {
-        if (currentBudget + intervention.cost <= maxBudget && currentTrainers + intervention.trainersNeeded <= maxTrainers) {
-          recommendedPlan.push(intervention);
-          currentBudget += intervention.cost;
-          currentTrainers += intervention.trainersNeeded;
-        }
-      }
-
-      resolve({ recommendedPlan, totalCost: currentBudget, totalTrainers: currentTrainers });
-    }, 800);
+export const resetUserPassword = async (userId, newPassword, adminRole = 'Admin') => {
+  return await apiFetch(`/api/admin/users/${userId}/reset-password`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': adminRole,
+    },
+    body: JSON.stringify({ new_password: newPassword }),
   });
+};
+
+// ============================================
+// 🆕 ADMIN — DASHBOARD STATS
+// ============================================
+export const fetchAdminStats = async (adminRole = 'Admin') => {
+  return await apiFetch('/api/admin/stats', {
+    headers: { 'x-user-role': adminRole },
+  });
+};
+
+// ============================================
+// 🆕 EXCEL IMPORT
+// ============================================
+export const previewExcelImport = async (file, department, userRole, userDept) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('department', department);
+
+  const response = await fetch(`${API_BASE_URL}/api/import/preview`, {
+    method: 'POST',
+    headers: {
+      'x-user-role': userRole,
+      'x-user-department': userDept || '',
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Preview failed: ${error}`);
+  }
+  return await response.json();
+};
+
+export const confirmExcelImport = async (token, fileName, userRole, userDept, userId) => {
+  const response = await fetch(`${API_BASE_URL}/api/import/confirm`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': userRole,
+      'x-user-department': userDept || '',
+      'x-user-id': userId || '',
+    },
+    body: JSON.stringify({ token, file_name: fileName }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Import failed: ${error}`);
+  }
+  return await response.json();
+};
+
+export const fetchImportHistory = async (userRole, userDept) => {
+  return await apiFetch('/api/import/history', {
+    headers: {
+      'x-user-role': userRole,
+      'x-user-department': userDept || '',
+    },
+  });
+};
+
+export const fetchTemplateInfo = async () => {
+  return await apiFetch('/api/import/template-info');
 };

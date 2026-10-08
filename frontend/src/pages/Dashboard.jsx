@@ -1,134 +1,151 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { Container, Row, Col, Card, Button, Badge, Table, ProgressBar } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Table, ProgressBar } from 'react-bootstrap';
+import {
+  FiUsers, FiCheckCircle, FiAlertTriangle, FiUploadCloud,
+  FiTrendingUp, FiBriefcase, FiTarget, FiActivity, FiUserCheck
+} from 'react-icons/fi';
+import PageHeader from '../components/ui/PageHeader';
+import MetricCard from '../components/ui/MetricCard';
+import StatusBadge from '../components/ui/StatusBadge';
+import EmptyState from '../components/ui/EmptyState';
 
 const Dashboard = () => {
-  const { user, matchResults, currentJD } = useApp();
+  const { user, matchResults, currentJD, studentProfile } = useApp();
   const navigate = useNavigate();
+
+  // Redirect Admin users to the dedicated Admin Dashboard
+  React.useEffect(() => {
+    if (user && user.role === 'Admin') {
+      navigate('/admin');
+    }
+  }, [user, navigate]);
+
+  if (!user) return null;
 
   const role = user.role;
 
-  // Mock Statistics for Dashboard
-  const totalStudents = 150;
-  const readyCount = matchResults.filter(s => s.status === 'Ready').length;
-  const recoverableCount = matchResults.filter(s => s.status === 'Recoverable').length;
-  const blockedCount = matchResults.filter(s => s.status === 'Blocked').length;
-  const activeDrives = currentJD ? 1 : 0;
+  // Don't render anything for Admin — they get redirected above
+  if (role === 'Admin') return null;
 
-  const StatCard = ({ title, value, color, icon }) => (
-    <Card className={`border-0 shadow-sm mb-4 bg-${color} text-white`}>
-      <Card.Body className="d-flex align-items-center justify-content-between">
-        <div>
-          <h6 className="text-uppercase mb-1" style={{ fontSize: '0.8rem', opacity: 0.8 }}>{title}</h6>
-          <h2 className="mb-0 fw-bold">{value}</h2>
-        </div>
-        <div style={{ fontSize: '2rem' }}>{icon}</div>
-      </Card.Body>
-    </Card>
-  );
+  // ==================== PLACEMENT OFFICER ====================
+  const PlacementOfficerDashboard = () => {
+    const isSystemEmpty = matchResults.length === 0;
 
-  // --- Role Specific Views ---
-
-  const PlacementOfficerDashboard = () => (
-    <>
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h2 className="fw-bold">Placement Officer Dashboard</h2>
-        <Button variant="primary" onClick={() => navigate('/jd-upload')}>+ New Drive</Button>
-      </div>
-
-      <Row>
-        <Col md={3}><StatCard title="Total Students" value={totalStudents} color="primary" icon="👥" /></Col>
-        <Col md={3}><StatCard title="Ready" value={readyCount || 45} color="success" icon="✅" /></Col>
-        <Col md={3}><StatCard title="Recoverable" value={recoverableCount || 30} color="warning" icon="🔄" /></Col>
-        <Col md={3}><StatCard title="Active Drives" value={activeDrives || 2} color="info" icon="🚀" /></Col>
-      </Row>
-
-      <Row>
-        <Col md={8}>
-          <Card className="border-0 shadow-sm mb-4">
-            <Card.Header className="bg-white border-0 py-3">
-              <h5 className="mb-0 fw-bold">Recent Activity</h5>
-            </Card.Header>
-            <Card.Body>
-              <Table hover responsive className="align-middle">
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Role</th>
-                    <th>Deadline</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>TechCorp</td>
-                    <td>Software Engineer</td>
-                    <td>2026-10-15</td>
-                    <td><Badge bg="success">Active</Badge></td>
-                  </tr>
-                  <tr>
-                    <td>DataFlow</td>
-                    <td>Data Analyst</td>
-                    <td>2026-10-20</td>
-                    <td><Badge bg="warning">Pending</Badge></td>
-                  </tr>
-                </tbody>
-              </Table>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={4}>
-          <Card className="border-0 shadow-sm mb-4">
-            <Card.Header className="bg-white border-0 py-3">
-              <h5 className="mb-0 fw-bold">Quick Actions</h5>
-            </Card.Header>
-            <Card.Body className="d-grid gap-2">
-              <Button variant="outline-primary" onClick={() => navigate('/segmentation')}>🔍 View Batch Segmentation</Button>
-              <Button variant="outline-warning" onClick={() => navigate('/recovery')}>📈 Run Opportunity Recovery</Button>
-              <Button variant="outline-success" onClick={() => navigate('/learning-loop')}>🧠 View Analytics</Button>
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
-    </>
-  );
-
-      const StudentDashboard = () => {
-    const { studentProfile } = useApp(); 
-    const myProfile = studentProfile || matchResults.find(s => s.name === "Alice Smith") || matchResults[0]; 
-    const score = myProfile ? (myProfile.readinessScore || 65) : 65;
-    
     return (
       <>
-        <h2 className="fw-bold mb-4">Student Dashboard</h2>
-        <Row>
-          <Col md={4}><StatCard title="My Readiness Score" value={`${score}/100`} color="primary" icon="🎯" /></Col>
-          <Col md={4}><StatCard title="Current Status" value={myProfile ? (myProfile.status || 'Recoverable') : 'Pending Resume'} color="warning" icon="⚡" /></Col>
-          <Col md={4}><StatCard title="Applied Drives" value="0" color="info" icon="📄" /></Col>
+        <PageHeader
+          breadcrumb="HOME / DASHBOARD"
+          title="Placement Officer Dashboard"
+          subtitle="Monitor candidate readiness, active drives, and placement outcomes."
+          actions={
+            <Button variant="primary" onClick={() => navigate('/jd-upload')}>
+              <FiUploadCloud className="me-2" /> New Drive
+            </Button>
+          }
+        />
+
+        {isSystemEmpty ? (
+          <EmptyState
+            icon={<FiUploadCloud />}
+            title="No Active Drives Found"
+            description="Your dashboard is empty because no Job Description has been uploaded yet. Upload a JD to run the matching engine."
+            action={<Button variant="primary" size="lg" onClick={() => navigate('/jd-upload')}>Upload Your First JD</Button>}
+          />
+        ) : (
+          <>
+            <Row className="g-3 mb-4">
+              <Col md={6} lg={3}><MetricCard title="Total Candidates" value={totalStudents} icon={<FiUsers />} color="primary" /></Col>
+              <Col md={6} lg={3}><MetricCard title="Ready" value={readyCount} icon={<FiCheckCircle />} color="success" /></Col>
+              <Col md={6} lg={3}><MetricCard title="Recoverable" value={recoverableCount} icon={<FiAlertTriangle />} color="warning" /></Col>
+              <Col md={6} lg={3}><MetricCard title="Active Drives" value={activeDrives} icon={<FiBriefcase />} color="info" /></Col>
+            </Row>
+
+            <Row className="g-3">
+              <Col lg={8}>
+                <Card className="border-0 h-100">
+                  <Card.Header><h5 className="mb-0 fw-bold">Recent Activity</h5></Card.Header>
+                  <Card.Body className="p-0">
+                    <Table hover responsive className="mb-0">
+                      <thead>
+                        <tr><th>Company</th><th>Role</th><th>Deadline</th><th>Status</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="fw-semibold">{currentJD?.company_name || 'TechCorp'}</td>
+                          <td className="text-muted">{currentJD?.role || 'Software Engineer'}</td>
+                          <td className="text-muted">{currentJD?.deadline || '2026-10-15'}</td>
+                          <td><StatusBadge status="Active" /></td>
+                        </tr>
+                      </tbody>
+                    </Table>
+                  </Card.Body>
+                </Card>
+              </Col>
+              <Col lg={4}>
+                <Card className="border-0 h-100">
+                  <Card.Header><h5 className="mb-0 fw-bold">Quick Actions</h5></Card.Header>
+                  <Card.Body className="d-grid gap-2">
+                    <Button variant="outline-primary" className="text-start" onClick={() => navigate('/segmentation')}>
+                      <FiTarget className="me-2" /> Batch Segmentation
+                    </Button>
+                    <Button variant="outline-warning" className="text-start" onClick={() => navigate('/recovery')}>
+                      <FiTrendingUp className="me-2" /> Opportunity Recovery
+                    </Button>
+                    <Button variant="outline-success" className="text-start" onClick={() => navigate('/learning-loop')}>
+                      <FiActivity className="me-2" /> View Analytics
+                    </Button>
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+          </>
+        )}
+      </>
+    );
+  };
+
+  // ==================== STUDENT ====================
+  const StudentDashboard = () => {
+    const myProfile = studentProfile || matchResults.find(s => s.name === 'Alice Smith') || matchResults[0];
+    const score = myProfile ? (myProfile.readinessScore || 65) : 65;
+    const status = myProfile ? (myProfile.status || 'Recoverable') : 'Pending';
+
+    return (
+      <>
+        <PageHeader breadcrumb="HOME / DASHBOARD" title={`Welcome, ${myProfile?.name || 'Student'}`} subtitle="Your personalized placement readiness overview." />
+
+        <Row className="g-3 mb-4">
+          <Col md={6} lg={3}><MetricCard title="Readiness Score" value={`${score}/100`} icon={<FiTarget />} color="primary" /></Col>
+          <Col md={6} lg={3}><MetricCard title="Status" value={status} icon={<FiActivity />} color={status === 'Ready' ? 'success' : status === 'Recoverable' ? 'warning' : 'slate'} /></Col>
+          <Col md={6} lg={3}><MetricCard title="Applied Drives" value="3" icon={<FiBriefcase />} color="info" /></Col>
+          <Col md={6} lg={3}><MetricCard title="Deadlines" value="2" icon={<FiAlertTriangle />} color="danger" /></Col>
         </Row>
-        <Row>
-          <Col md={8}>
-            <Card className="border-0 shadow-sm mb-4">
-              <Card.Header className="bg-white border-0 py-3">
-                <h5 className="mb-0 fw-bold">My Readiness Progress</h5>
-              </Card.Header>
+
+        <Row className="g-3">
+          <Col lg={8}>
+            <Card className="border-0 h-100">
+              <Card.Header><h5 className="mb-0 fw-bold">My Readiness Progress</h5></Card.Header>
               <Card.Body>
-                <p className="text-muted">Upload your resume to see how you match against active company drives!</p>
-                <ProgressBar now={score} variant="success" className="mb-2" style={{ height: '20px' }} />
-                <small className="text-muted">{score}% Ready</small>
+                <ProgressBar now={score} variant={score >= 80 ? 'success' : score >= 50 ? 'warning' : 'danger'} className="mb-2" style={{ height: '12px' }} />
+                <small className="fw-bold">{score}% Ready</small>
               </Card.Body>
             </Card>
           </Col>
-          <Col md={4}>
-            <Card className="border-0 shadow-sm mb-4">
-              <Card.Header className="bg-white border-0 py-3">
-                <h5 className="mb-0 fw-bold">Next Steps</h5>
-              </Card.Header>
+          <Col lg={4}>
+            <Card className="border-0 h-100">
+              <Card.Header><h5 className="mb-0 fw-bold">Next Steps</h5></Card.Header>
               <Card.Body className="d-grid gap-2">
-                <Button variant="success" onClick={() => navigate('/resume-upload')}>📄 Upload Resume</Button>
-                <Button variant="primary" onClick={() => navigate('/why-not-me')}>❓ Why Not Me?</Button>
-                <Button variant="info" onClick={() => navigate('/plan')}>🗓️ View Training Plan</Button>
+                <Button variant="primary" onClick={() => navigate('/resume-upload')}>
+                  <FiUploadCloud className="me-2" /> Upload Resume
+                </Button>
+                <Button variant="outline-primary" onClick={() => navigate('/why-not-me')}>
+                  <FiUserCheck className="me-2" /> Why Not Me?
+                </Button>
+                <Button variant="outline-info" onClick={() => navigate('/plan')}>
+                  <FiTarget className="me-2" /> Training Plan
+                </Button>
               </Card.Body>
             </Card>
           </Col>
@@ -137,116 +154,53 @@ const Dashboard = () => {
     );
   };
 
+  // ==================== TRAINER ====================
   const TrainerDashboard = () => (
     <>
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h2 className="fw-bold">Faculty / Trainer Dashboard</h2>
-        <Button variant="warning" onClick={() => navigate('/simulator')}>Run What-if Simulator</Button>
-      </div>
-      <Row>
-        <Col md={4}><StatCard title="Assigned Students" value="85" color="primary" icon="👨‍🎓" /></Col>
-        <Col md={4}><StatCard title="Training Sessions" value="12" color="success" icon="📚" /></Col>
-        <Col md={4}><StatCard title="Avg. Improvement" value="+18%" color="info" icon="📈" /></Col>
-      </Row>
-      <Row>
-        <Col md={6}>
-          <Card className="border-0 shadow-sm mb-4">
-            <Card.Header className="bg-white border-0 py-3">
-              <h5 className="mb-0 fw-bold">Top Blockers to Address</h5>
-            </Card.Header>
-            <Card.Body>
-              <Table hover responsive>
-                <thead>
-                  <tr>
-                    <th>Skill</th>
-                    <th>Students Affected</th>
-                    <th>Priority</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td>SQL</td><td>42</td><td><Badge bg="danger">High</Badge></td></tr>
-                  <tr><td>Aptitude</td><td>28</td><td><Badge bg="warning">Medium</Badge></td></tr>
-                  <tr><td>Python</td><td>15</td><td><Badge bg="info">Low</Badge></td></tr>
-                </tbody>
-              </Table>
-              <Button variant="outline-danger" size="sm" onClick={() => navigate('/segmentation')}>View All Blockers</Button>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={6}>
-          <Card className="border-0 shadow-sm mb-4">
-            <Card.Header className="bg-white border-0 py-3">
-              <h5 className="mb-0 fw-bold">Training Effectiveness</h5>
-            </Card.Header>
-            <Card.Body>
-              <p className="text-muted">Recent intervention success rates</p>
-              <div className="mb-3">
-                <div className="d-flex justify-content-between"><span>SQL Training</span><span>85%</span></div>
-                <ProgressBar now={85} variant="success" />
-              </div>
-              <div className="mb-3">
-                <div className="d-flex justify-content-between"><span>Aptitude Training</span><span>70%</span></div>
-                <ProgressBar now={70} variant="warning" />
-              </div>
-              <div className="mb-3">
-                <div className="d-flex justify-content-between"><span>Python Bootcamp</span><span>90%</span></div>
-                <ProgressBar now={90} variant="primary" />
-              </div>
-              <Button variant="outline-success" size="sm" onClick={() => navigate('/learning-loop')}>View Full Analytics</Button>
-            </Card.Body>
-          </Card>
-        </Col>
+      <PageHeader breadcrumb="HOME / DASHBOARD" title="Faculty / Trainer Dashboard" subtitle="Manage training programs, monitor skill gaps, and measure effectiveness." />
+      <Row className="g-3 mb-4">
+        <Col md={6} lg={3}><MetricCard title="Assigned Students" value="85" icon={<FiUsers />} color="primary" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Training Sessions" value="12" icon={<FiActivity />} color="info" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Avg. Improvement" value="+18%" icon={<FiTrendingUp />} color="success" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Completion Rate" value="92%" icon={<FiCheckCircle />} color="success" /></Col>
       </Row>
     </>
   );
 
-  const AdminDashboard = () => (
+  // ==================== ADMIN/HOD ====================
+  const AdminDashboardLegacy = () => (
     <>
-      <h2 className="fw-bold mb-4">HOD / Admin Dashboard</h2>
-      <Row>
-        <Col md={3}><StatCard title="Placement Rate" value="82%" color="success" icon="🎓" /></Col>
-        <Col md={3}><StatCard title="Companies Visited" value="45" color="primary" icon="🏢" /></Col>
-        <Col md={3}><StatCard title="Highest Package" value="24 LPA" color="info" icon="💰" /></Col>
-        <Col md={3}><StatCard title="Avg. Package" value="6.5 LPA" color="warning" icon="📊" /></Col>
-      </Row>
-      <Row>
-        <Col md={12}>
-          <Card className="border-0 shadow-sm mb-4">
-            <Card.Header className="bg-white border-0 py-3">
-              <h5 className="mb-0 fw-bold">Department-wise Placement (2026)</h5>
-            </Card.Header>
-            <Card.Body>
-              <Table hover responsive>
-                <thead>
-                  <tr>
-                    <th>Department</th>
-                    <th>Total Students</th>
-                    <th>Placed</th>
-                    <th>Placement %</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td>CSE</td><td>120</td><td>105</td><td><Badge bg="success">87.5%</Badge></td><td><Button size="sm" variant="outline-primary" onClick={() => navigate('/curriculum-gap')}>Analyze Gap</Button></td></tr>
-                  <tr><td>ECE</td><td>80</td><td>60</td><td><Badge bg="warning">75.0%</Badge></td><td><Button size="sm" variant="outline-primary" onClick={() => navigate('/curriculum-gap')}>Analyze Gap</Button></td></tr>
-                  <tr><td>MECH</td><td>60</td><td>35</td><td><Badge bg="danger">58.3%</Badge></td><td><Button size="sm" variant="outline-primary" onClick={() => navigate('/curriculum-gap')}>Analyze Gap</Button></td></tr>
-                </tbody>
-              </Table>
-            </Card.Body>
-          </Card>
-        </Col>
+      <PageHeader breadcrumb="HOME / DASHBOARD" title="HOD / Admin Dashboard" subtitle="Executive overview of placement performance." />
+      <Row className="g-3 mb-4">
+        <Col md={6} lg={3}><MetricCard title="Placement Rate" value="82%" icon={<FiCheckCircle />} color="success" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Companies" value="45" icon={<FiBriefcase />} color="primary" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Highest Package" value="24 LPA" icon={<FiTrendingUp />} color="info" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Avg. Package" value="6.5 LPA" icon={<FiActivity />} color="warning" /></Col>
       </Row>
     </>
   );
 
-  // --- Main Render Logic ---
+  // ==================== RECRUITER ====================
+  const RecruiterDashboard = () => (
+    <>
+      <PageHeader breadcrumb="HOME / DASHBOARD" title="Recruiter Dashboard" subtitle="Manage your drives, review candidates, and record outcomes." />
+      <Row className="g-3 mb-4">
+        <Col md={6} lg={3}><MetricCard title="Active Drives" value="2" icon={<FiBriefcase />} color="primary" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Eligible" value="48" icon={<FiUsers />} color="success" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Shortlisted" value="12" icon={<FiUserCheck />} color="info" /></Col>
+        <Col md={6} lg={3}><MetricCard title="Selected" value="4" icon={<FiCheckCircle />} color="success" /></Col>
+      </Row>
+    </>
+  );
+
+  // ==================== RENDER LOGIC ====================
   return (
     <Container fluid className="p-0">
       {role === 'Student' && <StudentDashboard />}
       {role === 'Placement Officer' && <PlacementOfficerDashboard />}
-      {role === 'HOD/Admin' && <AdminDashboard />} 
+      {role === 'HOD/Admin' && <AdminDashboardLegacy />}
       {role === 'Faculty/Trainer' && <TrainerDashboard />}
-      {role === 'Recruiter' && <PlacementOfficerDashboard />} {/* Recruiter gets a similar view for now */}
+      {role === 'Recruiter' && <RecruiterDashboard />}
     </Container>
   );
 };

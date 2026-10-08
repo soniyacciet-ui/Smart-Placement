@@ -1,10 +1,10 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { 
-  FiHome, FiUploadCloud, FiPieChart, FiTrendingUp, FiUsers, 
-  FiSettings, FiLogOut, FiBookOpen, FiBriefcase, FiCheckSquare, 
-  FiActivity, FiTarget, FiGrid 
+import {
+  FiHome, FiUploadCloud, FiPieChart, FiTrendingUp, FiUsers, FiUserCheck,
+  FiSettings, FiLogOut, FiBookOpen, FiBriefcase, FiCheckSquare,
+  FiActivity, FiTarget, FiGrid
 } from 'react-icons/fi';
 
 const Sidebar = ({ isCollapsed }) => {
@@ -22,7 +22,17 @@ const Sidebar = ({ isCollapsed }) => {
   const role = user.role;
 
   const navItems = [
-    { label: 'Dashboard', path: '/dashboard', icon: <FiGrid />, roles: ['Student', 'Placement Officer', 'Faculty/Trainer', 'HOD/Admin', 'Recruiter'] },
+    // ============ ADMIN ONLY ============
+    { label: 'Admin Dashboard', path: '/admin', icon: <FiGrid />, roles: ['Admin'] },
+    { label: 'User Management', path: '/admin/users', icon: <FiUsers />, roles: ['Admin'] },
+    { label: 'Create User', path: '/admin/create-user', icon: <FiUserCheck />, roles: ['Admin'] },
+
+    // ============ IMPORT (Admin + Dept Users) ============
+    { label: 'Import Students', path: '/admin/import', icon: <FiUploadCloud />, roles: ['Admin', 'HOD/Admin', 'Faculty/Trainer', 'Placement Officer'] },
+    { label: 'Import History', path: '/admin/import-history', icon: <FiActivity />, roles: ['Admin', 'HOD/Admin', 'Faculty/Trainer', 'Placement Officer'] },
+
+    // ============ EXISTING NAVIGATION ============
+    { label: 'Dashboard', path: '/dashboard', icon: <FiHome />, roles: ['Student', 'Placement Officer', 'Faculty/Trainer', 'HOD/Admin', 'Recruiter'] },
     { label: 'Upload JD', path: '/jd-upload', icon: <FiUploadCloud />, roles: ['Placement Officer', 'HOD/Admin'] },
     { label: 'Upload Resume', path: '/resume-upload', icon: <FiUploadCloud />, roles: ['Student'] },
     { label: 'Batch Diagnosis', path: '/segmentation', icon: <FiPieChart />, roles: ['Placement Officer', 'HOD/Admin', 'Faculty/Trainer'] },
@@ -56,10 +66,7 @@ const Sidebar = ({ isCollapsed }) => {
       {/* Logo Area */}
       <div
         className="d-flex align-items-center justify-content-center"
-        style={{
-          height: '70px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-        }}
+        style={{ height: '70px', borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}
       >
         <div className="d-flex align-items-center gap-2">
           <div
@@ -86,7 +93,7 @@ const Sidebar = ({ isCollapsed }) => {
       {!isCollapsed && (
         <div className="px-3 py-3">
           <div
-            className="text-center text-white fw-semibold"
+            className="text-center fw-semibold"
             style={{
               fontSize: '0.7rem',
               letterSpacing: '0.08em',
