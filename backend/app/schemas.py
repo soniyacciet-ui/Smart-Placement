@@ -161,3 +161,33 @@ class ImportResultResponse(BaseModel):
     failed: int
     skipped: int
     errors: List[ImportPreviewRow]
+
+    # ============================================
+# NEW — SHORTLIST
+# ============================================
+class ShortlistCreate(BaseModel):
+    student_id: int
+    jd_id: int
+    notes: Optional[str] = ""
+
+
+class ShortlistUpdate(BaseModel):
+    stage: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ShortlistOut(BaseModel):
+    id: int
+    student_id: int
+    student_name: str
+    register_number: Optional[str] = None
+    department: Optional[str] = None
+    cgpa: Optional[float] = None
+    skills: List[str] = []
+    jd_id: int
+    stage: str
+    notes: Optional[str] = ""
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

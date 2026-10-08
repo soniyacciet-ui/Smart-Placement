@@ -9,6 +9,7 @@ from .database import engine, get_db, SessionLocal
 from .seed import seed_database
 from . import excel_handler
 from . import resume_parser
+from datetime import datetime
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -941,4 +942,306 @@ def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
         "recommended_count": len(recommended),
         "recommended": recommended,
         "all_ranked": ranked,
+    }
+
+# ======================================================
+# 🆕 RECRUITER SHORTLIST — Pipeline Management
+# ======================================================
+
+VALID_STAGES = ["Shortlisted", "Assessment", "Interview", "Selected", "Rejected"]
+
+
+@app.post("/api/recruiter/shortlist", response_model=schemas.ShortlistOut)
+def add_to_shortlist(
+    payload: schemas.ShortlistCreate,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+):
+    allowed = ["Recruiter", "Placement Officer", "Admin"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    student = db.query(models.Student).filter(models.Student.id == payload.student_id).first()
+    jd = db.query(models.JobDescription).filter(models.JobDescription.id == payload.jd_id).first()
+    if not student or not jd:
+        raise HTTPException(status_code=404, detail="Student or JD not found")
+
+    # Prevent duplicate entries
+    existing = db.query(models.Shortlist).filter(
+        models.Shortlist.student_id == payload.student_id,
+        models.Shortlist.jd_id == payload.jd_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Student already in shortlist for this JD")
+
+    recruiter_id = int(x_user_id) if x_user_id and x_user_id.isdigit() else None
+
+    entry = models.Shortlist(
+        student_id=payload.student_id,
+        jd_id=payload.jd_id,
+        recruiter_id=recruiter_id,
+        stage="Shortlisted",
+        notes=payload.notes or "",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    skills = [s.strip() for s in (student.skills or "").split(",") if s.strip()]
+
+    return {
+        "id": entry.id,
+        "student_id": student.id,
+        "student_name": student.name,
+        "register_number": student.register_number,
+        "department": student.department,
+        "cgpa": student.cgpa,
+        "skills": skills,
+        "jd_id": entry.jd_id,
+        "stage": entry.stage,
+        "notes": entry.notes,
+        "created_at": entry.created_at,
+    }
+
+
+@app.get("/api/recruiter/shortlist/{jd_id}")
+def get_shortlist(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    allowed = ["Recruiter", "Placement Officer", "Admin"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    entries = db.query(models.Shortlist).filter(models.Shortlist.jd_id == jd_id).all()
+
+    result = []
+    for e in entries:
+        student = db.query(models.Student).filter(models.Student.id == e.student_id).first()
+        if not student:
+            continue
+        result.append({
+            "id": e.id,
+            "student_id": student.id,
+            "student_name": student.name,
+            "register_number": student.register_number,
+            "department": student.department,
+            "cgpa": student.cgpa,
+            "skills": [s.strip() for s in (student.skills or "").split(",") if s.strip()],
+            "jd_id": e.jd_id,
+            "stage": e.stage,
+            "notes": e.notes,
+            "created_at": e.created_at,
+        })
+
+    # Group by stage for Kanban
+    grouped = {stage: [] for stage in VALID_STAGES}
+    for item in result:
+        if item["stage"] in grouped:
+            grouped[item["stage"]].append(item)
+
+    return {
+        "jd_id": jd_id,
+        "total": len(result),
+        "grouped": grouped,
+        "all": result,
+    }
+
+
+@app.patch("/api/recruiter/shortlist/{shortlist_id}")
+def update_shortlist(
+    shortlist_id: int,
+    payload: schemas.ShortlistUpdate,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    allowed = ["Recruiter", "Placement Officer", "Admin"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    entry = db.query(models.Shortlist).filter(models.Shortlist.id == shortlist_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Shortlist entry not found")
+
+    if payload.stage:
+        if payload.stage not in VALID_STAGES:
+            raise HTTPException(status_code=400, detail=f"Invalid stage. Use: {', '.join(VALID_STAGES)}")
+        entry.stage = payload.stage
+    if payload.notes is not None:
+        entry.notes = payload.notes
+
+    entry.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(entry)
+    return {"message": "Updated", "stage": entry.stage}
+
+
+@app.delete("/api/recruiter/shortlist/{shortlist_id}")
+def remove_from_shortlist(
+    shortlist_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    allowed = ["Recruiter", "Placement Officer", "Admin"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    entry = db.query(models.Shortlist).filter(models.Shortlist.id == shortlist_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    db.delete(entry)
+    db.commit()
+    return {"message": "Removed from shortlist"}
+
+
+@app.get("/api/recruiter/shortlist-available/{jd_id}")
+def available_candidates(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+):
+    """
+    Returns students NOT yet in the shortlist for this JD,
+    ranked by AI score.
+    """
+    allowed = ["Recruiter", "Placement Officer", "Admin"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Get already-shortlisted student IDs
+    shortlisted_ids = {
+        s.student_id for s in
+        db.query(models.Shortlist).filter(models.Shortlist.jd_id == jd_id).all()
+    }
+
+    jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
+    if not jd:
+        raise HTTPException(status_code=404, detail="JD not found")
+
+    jd_skills = [s.strip().lower() for s in jd.actionable_skills.split(",") if s.strip()]
+
+    students = db.query(models.Student).all()
+    available = []
+
+    for s in students:
+        if s.id in shortlisted_ids:
+            continue
+        student_skills = [sk.strip().lower() for sk in (s.skills or "").split(",") if sk.strip()]
+        matched = [sk for sk in jd_skills if sk in student_skills]
+        missing = [sk for sk in jd_skills if sk not in student_skills]
+        match_pct = (len(matched) / len(jd_skills) * 100) if jd_skills else 0
+        ai_score = round(
+            (match_pct / 100) * 60 +
+            min(25, ((s.cgpa or 0) / 10) * 25) +
+            (max(0, 100 - len(missing) * 20) / 100) * 15,
+            1
+        )
+        available.append({
+            "student_id": s.id,
+            "name": s.name,
+            "register_number": s.register_number,
+            "department": s.department,
+            "cgpa": s.cgpa,
+            "skills": [x.strip() for x in (s.skills or "").split(",") if x.strip()],
+            "ai_score": ai_score,
+            "match_pct": round(match_pct, 1),
+        })
+
+    available.sort(key=lambda x: x["ai_score"], reverse=True)
+    return {"jd_id": jd_id, "available": available}
+
+# ======================================================
+# 🆕 HOD DEPARTMENT DASHBOARD
+# ======================================================
+@app.get("/api/hod/department-stats")
+def hod_department_stats(
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+    x_user_department: Optional[str] = Header(None),
+):
+    """
+    Returns HOD-scoped statistics for their own department only.
+    """
+    allowed = ["HOD/Admin", "Admin", "Faculty/Trainer", "Placement Officer"]
+    if x_user_role not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if not x_user_department and x_user_role != "Admin":
+        raise HTTPException(status_code=400, detail="No department assigned to your account")
+
+    dept = (x_user_department or "").upper()
+
+    # Filter students by department (Admin sees all)
+    if x_user_role == "Admin":
+        students = db.query(models.Student).all()
+    else:
+        students = db.query(models.Student).filter(
+            models.Student.department == dept
+        ).all()
+
+    total_students = len(students)
+
+    # Skill gap analysis for this department
+    all_skills = {}
+    for s in students:
+        for skill in (s.skills or "").split(","):
+            skill = skill.strip()
+            if skill:
+                all_skills[skill] = all_skills.get(skill, 0) + 1
+
+    # Top skills present
+    top_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # Students with no skills (need attention)
+    no_skills_count = sum(1 for s in students if not s.skills or not s.skills.strip())
+
+    # Recent imports for this department
+    recent_imports_q = db.query(models.ImportHistory).filter(
+        models.ImportHistory.department == dept
+    ).order_by(models.ImportHistory.uploaded_at.desc()).limit(5).all()
+
+    recent_imports = [
+        {
+            "id": h.id,
+            "file_name": h.file_name,
+            "uploaded_by": h.uploaded_by,
+            "new_students": h.new_students,
+            "updated_students": h.updated_students,
+            "failed_rows": h.failed_rows,
+            "uploaded_at": h.uploaded_at,
+        }
+        for h in recent_imports_q
+    ]
+
+    # CGPA distribution
+    cgpa_ranges = {"9-10": 0, "8-9": 0, "7-8": 0, "6-7": 0, "<6": 0}
+    for s in students:
+        c = s.cgpa or 0
+        if c >= 9: cgpa_ranges["9-10"] += 1
+        elif c >= 8: cgpa_ranges["8-9"] += 1
+        elif c >= 7: cgpa_ranges["7-8"] += 1
+        elif c >= 6: cgpa_ranges["6-7"] += 1
+        else: cgpa_ranges["<6"] += 1
+
+    # Batch distribution
+    batch_dist = {}
+    for s in students:
+        b = s.batch or "Unknown"
+        batch_dist[b] = batch_dist.get(b, 0) + 1
+
+    return {
+        "department": dept or "All",
+        "total_students": total_students,
+        "no_skills_count": no_skills_count,
+        "skills_coverage_pct": round(
+            ((total_students - no_skills_count) / total_students * 100) if total_students else 0,
+            1
+        ),
+        "top_skills": [{"skill": k, "count": v} for k, v in top_skills],
+        "cgpa_distribution": cgpa_ranges,
+        "batch_distribution": batch_dist,
+        "recent_imports": recent_imports,
     }

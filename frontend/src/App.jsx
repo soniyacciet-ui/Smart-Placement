@@ -26,6 +26,7 @@ import UserManagement from './pages/UserManagement';
 import CreateUser from './pages/CreateUser';
 import ExcelImport from './pages/ExcelImport';
 import ImportHistory from './pages/ImportHistory';
+import RecruiterShortlist from './pages/RecruiterShortlist';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user } = useApp();
@@ -66,7 +67,7 @@ function AppRoutes() {
             <Route path="/learning-loop" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><LearningLoop /></ProtectedRoute>} />
             <Route path="/missed-opportunity" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin']}><MissedOpportunity /></ProtectedRoute>} />
             <Route path="/curriculum-gap" element={<ProtectedRoute allowedRoles={['Placement Officer', 'Admin', 'Trainer']}><CurriculumGap /></ProtectedRoute>} />
-
+            <Route path="/recruiter-shortlist" element={<ProtectedRoute allowedRoles={['Recruiter', 'Placement Officer', 'Admin']}><RecruiterShortlist /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute allowedRoles={['Admin']}><AdminDashboard /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute allowedRoles={['Admin']}><UserManagement /></ProtectedRoute>} />
             <Route path="/admin/create-user" element={<ProtectedRoute allowedRoles={['Admin']}><CreateUser /></ProtectedRoute>} />

@@ -304,3 +304,61 @@ export const globalSearch = async (query) => {
   }
   return await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
 };
+
+// ============================================
+// 🆕 RECRUITER SHORTLIST
+// ============================================
+export const addToShortlist = async (studentId, jdId, notes = '', userRole, userId) => {
+  return await apiFetch('/api/recruiter/shortlist', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': userRole,
+      'x-user-id': userId?.toString() || '',
+    },
+    body: JSON.stringify({ student_id: studentId, jd_id: jdId, notes }),
+  });
+};
+
+export const getShortlist = async (jdId, userRole) => {
+  return await apiFetch(`/api/recruiter/shortlist/${jdId}`, {
+    headers: { 'x-user-role': userRole },
+  });
+};
+
+export const updateShortlistStage = async (shortlistId, stage, userRole, notes = null) => {
+  const body = { stage };
+  if (notes !== null) body.notes = notes;
+  return await apiFetch(`/api/recruiter/shortlist/${shortlistId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-role': userRole,
+    },
+    body: JSON.stringify(body),
+  });
+};
+
+export const removeFromShortlist = async (shortlistId, userRole) => {
+  return await apiFetch(`/api/recruiter/shortlist/${shortlistId}`, {
+    method: 'DELETE',
+    headers: { 'x-user-role': userRole },
+  });
+};
+
+export const getAvailableCandidates = async (jdId, userRole) => {
+  return await apiFetch(`/api/recruiter/shortlist-available/${jdId}`, {
+    headers: { 'x-user-role': userRole },
+  });
+};
+// ============================================
+// 🆕 HOD DASHBOARD
+// ============================================
+export const getHodDepartmentStats = async (userRole, userDepartment) => {
+  return await apiFetch('/api/hod/department-stats', {
+    headers: {
+      'x-user-role': userRole,
+      'x-user-department': userDepartment || '',
+    },
+  });
+};

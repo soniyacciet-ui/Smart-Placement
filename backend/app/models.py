@@ -83,3 +83,17 @@ class ImportHistory(Base):
     failed_rows = Column(Integer, default=0)
     status = Column(String, default="Completed")
     uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    # ============================================
+# NEW MODEL — Shortlist (Recruiter Pipeline)
+# ============================================
+class Shortlist(Base):
+    __tablename__ = "shortlists"
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"))
+    jd_id = Column(Integer, ForeignKey("job_descriptions.id"))
+    recruiter_id = Column(Integer, nullable=True)   # User ID of the recruiter
+    stage = Column(String, default="Shortlisted")   # Shortlisted / Assessment / Interview / Selected / Rejected
+    notes = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
