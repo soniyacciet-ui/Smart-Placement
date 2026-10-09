@@ -39,7 +39,7 @@ const ImportHistory = () => {
     if (!window.confirm('Delete this import history record? (Students will NOT be deleted.)')) return;
     setDeleting(historyId);
     try {
-      await deleteImportHistoryRecord(historyId, user.role, user.department);
+      await deleteImportHistoryRecord(historyId);
       await load();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -55,7 +55,7 @@ const ImportHistory = () => {
     )) return;
 
     try {
-      const res = await clearDepartmentStudents(department, user.role, user.department);
+      const res = await clearDepartmentStudents(department);
       alert(`✅ ${res.message}`);
       await load();
     } catch (err) {

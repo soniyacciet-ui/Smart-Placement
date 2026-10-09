@@ -40,14 +40,18 @@ const Login = () => {
         throw new Error(err.detail || 'Login failed');
       }
 
-      const data = await response.json();
+            const data = await response.json();
+
+      // Save JWT to localStorage so all API calls use it
+      localStorage.setItem('drivex_token', data.access_token);
 
       setUser({
         id: data.user_id,
-        email: loginId,
+        email: data.email || loginId,
         role: data.role,
         department: data.department,
         name: data.name,
+        register_number: data.register_number,
         token: data.access_token,
       });
 

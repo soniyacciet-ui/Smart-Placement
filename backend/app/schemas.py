@@ -21,6 +21,8 @@ class LoginResponse(BaseModel):
     user_id: int
     department: Optional[str] = None
     name: Optional[str] = None
+    register_number: Optional[str] = None
+    expires_in: Optional[int] = 28800  # 8 hours in seconds
 
 
 # ============================================

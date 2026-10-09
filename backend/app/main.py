@@ -3,13 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from passlib.context import CryptContext
+from datetime import datetime
 
 from . import models, schemas
 from .database import engine, get_db, SessionLocal
 from .seed import seed_database
 from . import excel_handler
 from . import resume_parser
-from datetime import datetime
+from .auth import create_access_token, create_student_token, get_current_user, require_roles
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -19,7 +20,7 @@ db = SessionLocal()
 seed_database(db)
 db.close()
 
-app = FastAPI(title="DRIVE-X API", version="2.0.0")
+app = FastAPI(title="DRIVE-X API", version="2.1.0")
 
 # CORS
 app.add_middleware(
@@ -30,7 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -50,21 +50,20 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ======================================================
 @app.get("/")
 def root():
-    return {"message": "DRIVE-X Backend is running!", "version": "2.0.0"}
+    return {"message": "DRIVE-X Backend is running!", "version": "2.1.0"}
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "healthy", "backend": "DRIVE-X", "version": "2.0.0"}
+    return {"status": "healthy", "backend": "DRIVE-X", "version": "2.1.0"}
 
 
 # ======================================================
 # AUTH — LOGIN
-# Supports: email, login_id, register_number (for students)
 # ======================================================
 @app.post("/api/auth/login", response_model=schemas.LoginResponse)
 def login(user: schemas.LoginRequest, db: Session = Depends(get_db)):
-    # -------- STUDENT LOGIN (via Register Number) --------
+    # ---------- STUDENT LOGIN ----------
     if user.role == "Student" and user.register_number:
         student = db.query(models.Student).filter(
             models.Student.register_number == user.register_number
@@ -72,19 +71,19 @@ def login(user: schemas.LoginRequest, db: Session = Depends(get_db)):
         if not student:
             raise HTTPException(status_code=401, detail="Register number not found")
 
-        # If student has no password yet, allow first login with any password
-        # (In production, you'd enforce a password policy)
+        token = create_student_token(student)
         return {
-            "access_token": f"student-{student.id}-token",
+            "access_token": token,
             "token_type": "bearer",
             "role": "Student",
             "user_id": student.id,
             "department": student.department,
             "name": student.name,
+            "register_number": student.register_number,
+            "expires_in": 28800,
         }
 
-    # -------- STAFF / HOD / PO / ADMIN LOGIN --------
-    # Try login_id first, then email
+    # ---------- STAFF / HOD / PO / ADMIN LOGIN ----------
     db_user = None
     if user.login_id:
         db_user = db.query(models.User).filter(models.User.login_id == user.login_id).first()
@@ -92,44 +91,36 @@ def login(user: schemas.LoginRequest, db: Session = Depends(get_db)):
         db_user = db.query(models.User).filter(models.User.email == user.email).first()
 
     if not db_user:
-        # Fallback: create a demo user on-the-fly (preserves existing behavior)
-        email = user.email or user.login_id or "demo@drivex.com"
-        db_user = models.User(
-            email=email,
-            login_id=user.login_id or email,
-            hashed_password=hash_password(user.password),
-            role=user.role,
-            name=user.role,
-            status="Active",
-        )
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-    else:
-        # Verify password only if user has a real hash
-        if db_user.hashed_password and db_user.hashed_password != "dummy":
-            if not verify_password(user.password, db_user.hashed_password):
-                raise HTTPException(status_code=401, detail="Invalid password")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        # Check account status
-        if db_user.status == "Inactive":
-            raise HTTPException(status_code=403, detail="Account is deactivated")
+    if db_user.hashed_password and db_user.hashed_password != "dummy":
+        if not verify_password(user.password, db_user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid password")
 
+    if db_user.status == "Inactive":
+        raise HTTPException(status_code=403, detail="Account is deactivated")
+
+    token = create_access_token(db_user)
     return {
-        "access_token": f"token-{db_user.id}",
+        "access_token": token,
         "token_type": "bearer",
         "role": db_user.role,
         "user_id": db_user.id,
         "department": db_user.department,
         "name": db_user.name,
+        "register_number": None,
+        "expires_in": 28800,
     }
 
 
 # ======================================================
-# STUDENTS (existing — unchanged)
+# STUDENTS
 # ======================================================
 @app.get("/api/students")
-def list_students(db: Session = Depends(get_db)):
+def list_students(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     students = db.query(models.Student).all()
     return [
         {
@@ -147,19 +138,56 @@ def list_students(db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/api/students/me/{register_number}")
+def get_my_profile(
+    register_number: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    student = db.query(models.Student).filter(
+        models.Student.register_number == register_number
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Students can only view their own profile
+    if current_user["role"] == "Student":
+        if current_user.get("register_number") != register_number:
+            raise HTTPException(status_code=403, detail="You can only view your own profile")
+
+    return {
+        "id": student.id,
+        "name": student.name,
+        "register_number": student.register_number,
+        "email": student.email,
+        "cgpa": student.cgpa,
+        "department": student.department,
+        "skills": (student.skills or "").split(",") if student.skills else [],
+        "batch": student.batch,
+        "status": student.status,
+    }
+
+
 # ======================================================
-# INTERVENTIONS (existing — unchanged)
+# INTERVENTIONS
 # ======================================================
 @app.get("/api/interventions", response_model=List[schemas.InterventionOut])
-def list_interventions(db: Session = Depends(get_db)):
+def list_interventions(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     return db.query(models.Intervention).all()
 
 
 # ======================================================
-# JOB DESCRIPTIONS (existing — unchanged)
+# JOB DESCRIPTIONS
 # ======================================================
 @app.post("/api/jd/upload", response_model=schemas.JDOut)
-def upload_jd(jd: schemas.JDCreate, db: Session = Depends(get_db)):
+def upload_jd(
+    jd: schemas.JDCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin"])),
+):
     db_jd = models.JobDescription(**jd.dict())
     db.add(db_jd)
     db.commit()
@@ -168,7 +196,11 @@ def upload_jd(jd: schemas.JDCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/api/jd/{jd_id}", response_model=schemas.JDOut)
-def get_jd(jd_id: int, db: Session = Depends(get_db)):
+def get_jd(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
     if not jd:
         raise HTTPException(status_code=404, detail="JD not found")
@@ -176,10 +208,14 @@ def get_jd(jd_id: int, db: Session = Depends(get_db)):
 
 
 # ======================================================
-# MATCHING ENGINE (existing — unchanged)
+# MATCHING ENGINE
 # ======================================================
 @app.post("/api/match/run/{jd_id}")
-def run_matching(jd_id: int, db: Session = Depends(get_db)):
+def run_matching(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin", "Faculty/Trainer"])),
+):
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
     if not jd:
         raise HTTPException(status_code=404, detail="JD not found")
@@ -218,7 +254,11 @@ def run_matching(jd_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/match/{jd_id}/segments")
-def get_segments(jd_id: int, db: Session = Depends(get_db)):
+def get_segments(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     matches = db.query(models.MatchResult).filter(models.MatchResult.jd_id == jd_id).all()
     output = []
     for m in matches:
@@ -240,10 +280,14 @@ def get_segments(jd_id: int, db: Session = Depends(get_db)):
 
 
 # ======================================================
-# RECOVERY ENGINE (existing — unchanged)
+# RECOVERY
 # ======================================================
 @app.post("/api/recovery/run/{jd_id}")
-def run_recovery(jd_id: int, db: Session = Depends(get_db)):
+def run_recovery(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin"])),
+):
     matches = db.query(models.MatchResult).filter(models.MatchResult.jd_id == jd_id).all()
     recovered_count = 0
     results = []
@@ -274,10 +318,14 @@ def run_recovery(jd_id: int, db: Session = Depends(get_db)):
 
 
 # ======================================================
-# SIMULATOR (existing — unchanged)
+# SIMULATOR
 # ======================================================
 @app.post("/api/simulator/run")
-def run_simulator(payload: schemas.SimulatorRequest, db: Session = Depends(get_db)):
+def run_simulator(
+    payload: schemas.SimulatorRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin", "Faculty/Trainer"])),
+):
     matches = db.query(models.MatchResult).filter(models.MatchResult.jd_id == payload.jd_id).all()
     interventions = db.query(models.Intervention).filter(
         models.Intervention.id.in_(payload.selected_intervention_ids)
@@ -325,10 +373,14 @@ def run_simulator(payload: schemas.SimulatorRequest, db: Session = Depends(get_d
 
 
 # ======================================================
-# OPTIMIZER (existing — unchanged)
+# OPTIMIZER
 # ======================================================
 @app.post("/api/optimizer/run")
-def run_optimizer(payload: schemas.OptimizerRequest, db: Session = Depends(get_db)):
+def run_optimizer(
+    payload: schemas.OptimizerRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin", "Faculty/Trainer"])),
+):
     interventions = db.query(models.Intervention).all()
     sorted_int = sorted(interventions, key=lambda i: (i.impact / i.cost) if i.cost else 0, reverse=True)
 
@@ -357,24 +409,14 @@ def run_optimizer(payload: schemas.OptimizerRequest, db: Session = Depends(get_d
 
 
 # ======================================================
-# 🆕 ADMIN — USER MANAGEMENT
+# ADMIN — USER MANAGEMENT
 # ======================================================
-
-def _require_admin(x_user_role: Optional[str]):
-    """Simple role check. In production, verify JWT."""
-    if x_user_role != "Admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-
 @app.post("/api/admin/users", response_model=schemas.UserOut)
 def create_user(
     payload: schemas.CreateUserRequest,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Admin"])),
 ):
-    _require_admin(x_user_role)
-
-    # Duplicate checks
     if db.query(models.User).filter(models.User.login_id == payload.login_id).first():
         raise HTTPException(status_code=400, detail="Login ID already exists")
     if db.query(models.User).filter(models.User.email == payload.email).first():
@@ -402,9 +444,8 @@ def list_users(
     department: Optional[str] = None,
     status: Optional[str] = None,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Admin"])),
 ):
-    _require_admin(x_user_role)
     q = db.query(models.User)
     if role:
         q = q.filter(models.User.role == role)
@@ -420,9 +461,8 @@ def toggle_user_status(
     user_id: int,
     payload: schemas.ToggleStatusRequest,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Admin"])),
 ):
-    _require_admin(x_user_role)
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -437,9 +477,8 @@ def reset_password(
     user_id: int,
     payload: schemas.ResetPasswordRequest,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Admin"])),
 ):
-    _require_admin(x_user_role)
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -449,15 +488,13 @@ def reset_password(
 
 
 # ======================================================
-# 🆕 ADMIN — DASHBOARD STATS
+# ADMIN — DASHBOARD STATS
 # ======================================================
 @app.get("/api/admin/stats")
 def admin_stats(
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Admin"])),
 ):
-    _require_admin(x_user_role)
-
     total_students = db.query(models.Student).count()
     total_staff = db.query(models.User).filter(models.User.role == "Faculty/Trainer").count()
     total_hods = db.query(models.User).filter(models.User.role == "HOD/Admin").count()
@@ -465,13 +502,11 @@ def admin_stats(
     active_users = db.query(models.User).filter(models.User.status == "Active").count()
     inactive_users = db.query(models.User).filter(models.User.status == "Inactive").count()
 
-    # Department-wise student count
     dept_counts = {}
     for s in db.query(models.Student).all():
         d = s.department or "Unknown"
         dept_counts[d] = dept_counts.get(d, 0) + 1
 
-    # All distinct departments
     all_depts = set(dept_counts.keys())
     for u in db.query(models.User).all():
         if u.department:
@@ -490,30 +525,23 @@ def admin_stats(
 
 
 # ======================================================
-# 🆕 EXCEL IMPORT — UPLOAD + PREVIEW
+# EXCEL IMPORT — PREVIEW
 # ======================================================
 @app.post("/api/import/preview", response_model=schemas.ImportPreviewResponse)
 async def preview_import(
     file: UploadFile = File(...),
     department: str = Form(...),
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"])),
 ):
-    # Only Staff / HOD / Placement Officer / Admin can import
-    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
-    if x_user_role not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Not authorized to import")
-
-    # Department enforcement: non-Admin users can only import their own department
-    if x_user_role != "Admin" and x_user_department:
-        if department.upper() != x_user_department.upper():
+    # Department enforcement
+    if current_user["role"] != "Admin" and current_user.get("department"):
+        if department.upper() != current_user["department"].upper():
             raise HTTPException(
                 status_code=403,
-                detail=f"You can only import for {x_user_department}, not {department}"
+                detail=f"You can only import for {current_user['department']}, not {department}"
             )
 
-    # Validate file extension
     if not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
 
@@ -523,27 +551,20 @@ async def preview_import(
 
     try:
         result = excel_handler.parse_and_validate(contents, department.upper(), db)
-        result["token"] = result["token"]
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # ======================================================
-# 🆕 EXCEL IMPORT — CONFIRM
+# EXCEL IMPORT — CONFIRM
 # ======================================================
 @app.post("/api/import/confirm", response_model=schemas.ImportResultResponse)
 def confirm_import(
     payload: schemas.ImportConfirmRequest,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"])),
 ):
-    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
-    if x_user_role not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Not authorized to import")
-
     try:
         result = excel_handler.commit_import(payload.token, db)
     except ValueError as e:
@@ -552,9 +573,9 @@ def confirm_import(
     # Record import history
     history = models.ImportHistory(
         file_name=payload.file_name,
-        uploaded_by=x_user_id or "unknown",
-        role=x_user_role or "unknown",
-        department=x_user_department or "unknown",
+        uploaded_by=current_user.get("login_id") or current_user.get("name") or "unknown",
+        role=current_user["role"],
+        department=current_user.get("department") or "unknown",
         total_rows=result["total"],
         new_students=result["new_students"],
         updated_students=result["updated_students"],
@@ -568,22 +589,16 @@ def confirm_import(
 
 
 # ======================================================
-# 🆕 IMPORT HISTORY
+# IMPORT HISTORY
 # ======================================================
 @app.get("/api/import/history")
 def import_history(
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"])),
 ):
-    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
-    if x_user_role not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     q = db.query(models.ImportHistory)
-    # Non-admin only sees their department's history
-    if x_user_role != "Admin" and x_user_department:
-        q = q.filter(models.ImportHistory.department == x_user_department)
+    if current_user["role"] != "Admin" and current_user.get("department"):
+        q = q.filter(models.ImportHistory.department == current_user["department"])
 
     return [
         {
@@ -604,109 +619,19 @@ def import_history(
 
 
 # ======================================================
-# 🆕 STUDENT — VIEW OWN PROFILE (via register number)
-# ======================================================
-@app.get("/api/students/me/{register_number}")
-def get_my_profile(register_number: str, db: Session = Depends(get_db)):
-    student = db.query(models.Student).filter(
-        models.Student.register_number == register_number
-    ).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-    return {
-        "id": student.id,
-        "name": student.name,
-        "register_number": student.register_number,
-        "email": student.email,
-        "cgpa": student.cgpa,
-        "department": student.department,
-        "skills": (student.skills or "").split(",") if student.skills else [],
-        "batch": student.batch,
-        "status": student.status,
-    }
-
-
-# ======================================================
-# 🆕 ADMIN — SAMPLE EXCEL TEMPLATE INFO
-# ======================================================
-@app.get("/api/import/template-info")
-def template_info():
-    return {
-        "columns": ["Name", "Register Number", "Email", "CGPA", "Department"],
-        "example": {
-            "Name": "Arun Kumar",
-            "Register Number": "23AD001",
-            "Email": "arun@college.edu",
-            "CGPA": 8.2,
-            "Department": "AIDS",
-        },
-        "supported_departments": ["AIDS", "CSE", "ECE", "MECH", "CIVIL", "IT"],
-    }
-
-# ======================================================
-# 🆕 DELETE STUDENTS
-# ======================================================
-@app.delete("/api/admin/students/{student_id}")
-def delete_student(
-    student_id: int,
-    db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-):
-    _require_admin(x_user_role)
-    student = db.query(models.Student).filter(models.Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-    db.delete(student)
-    db.commit()
-    return {"message": f"Student {student.name} deleted"}
-
-
-@app.delete("/api/admin/students/department/{department}")
-def delete_department_students(
-    department: str,
-    db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-):
-    _require_admin(x_user_role)
-    deleted = db.query(models.Student).filter(models.Student.department == department.upper()).delete()
-    db.commit()
-    return {"message": f"Deleted {deleted} students from {department.upper()}"}
-
-
-@app.delete("/api/admin/import-history/{history_id}")
-def delete_import_history(
-    history_id: int,
-    db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-):
-    _require_admin(x_user_role)
-    record = db.query(models.ImportHistory).filter(models.ImportHistory.id == history_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="History record not found")
-    db.delete(record)
-    db.commit()
-    return {"message": "History record deleted"}
-
-# ======================================================
-# 🆕 CLEAR DEPARTMENT STUDENTS (Staff + Admin)
+# IMPORT — CLEAR DEPARTMENT
 # ======================================================
 @app.delete("/api/import/clear-department/{department}")
 def clear_department_students(
     department: str,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"])),
 ):
-    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
-    if x_user_role not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # Non-admin users can only clear their own department
-    if x_user_role != "Admin":
-        if not x_user_department or department.upper() != x_user_department.upper():
+    if current_user["role"] != "Admin":
+        if not current_user.get("department") or department.upper() != current_user["department"].upper():
             raise HTTPException(
                 status_code=403,
-                detail=f"You can only clear students from {x_user_department}"
+                detail=f"You can only clear students from {current_user.get('department')}"
             )
 
     deleted = db.query(models.Student).filter(
@@ -720,55 +645,52 @@ def clear_department_students(
 
 
 # ======================================================
-# 🆕 DELETE IMPORT HISTORY RECORD (Staff + Admin)
+# IMPORT — DELETE HISTORY RECORD
 # ======================================================
 @app.delete("/api/import/history/{history_id}")
 def delete_import_history_record(
     history_id: int,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"])),
 ):
-    allowed_roles = ["Faculty/Trainer", "HOD/Admin", "Placement Officer", "Admin"]
-    if x_user_role not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     record = db.query(models.ImportHistory).filter(models.ImportHistory.id == history_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Import history record not found")
 
-    if x_user_role != "Admin" and x_user_department:
-        if record.department != x_user_department:
+    if current_user["role"] != "Admin" and current_user.get("department"):
+        if record.department != current_user["department"]:
             raise HTTPException(status_code=403, detail="Not authorized for this department")
 
     db.delete(record)
     db.commit()
     return {"message": "Import history record deleted"}
 
+
 # ======================================================
-# 🆕 GLOBAL SEARCH
+# GLOBAL SEARCH
 # ======================================================
 @app.get("/api/search")
-def global_search(q: str, db: Session = Depends(get_db)):
+def global_search(
+    q: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     if not q or len(q.strip()) < 2:
         return {"students": [], "users": [], "jds": []}
 
     term = f"%{q.strip()}%"
 
-    # Search students (by name or register number)
     students = db.query(models.Student).filter(
         (models.Student.name.ilike(term)) |
         (models.Student.register_number.ilike(term))
     ).limit(5).all()
 
-    # Search users (by name, login_id, or email)
     users = db.query(models.User).filter(
         (models.User.name.ilike(term)) |
         (models.User.login_id.ilike(term)) |
         (models.User.email.ilike(term))
     ).limit(5).all()
 
-    # Search JDs (by company or role)
     jds = db.query(models.JobDescription).filter(
         (models.JobDescription.company_name.ilike(term)) |
         (models.JobDescription.role.ilike(term))
@@ -776,41 +698,35 @@ def global_search(q: str, db: Session = Depends(get_db)):
 
     return {
         "students": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "register_number": s.register_number,
-                "department": s.department,
-            } for s in students
+            {"id": s.id, "name": s.name, "register_number": s.register_number, "department": s.department}
+            for s in students
         ],
         "users": [
-            {
-                "id": u.id,
-                "name": u.name,
-                "login_id": u.login_id,
-                "role": u.role,
-                "department": u.department,
-            } for u in users
+            {"id": u.id, "name": u.name, "login_id": u.login_id, "role": u.role, "department": u.department}
+            for u in users
         ],
         "jds": [
-            {
-                "id": j.id,
-                "company_name": j.company_name,
-                "role": j.role,
-                "deadline": j.deadline,
-            } for j in jds
+            {"id": j.id, "company_name": j.company_name, "role": j.role, "deadline": j.deadline}
+            for j in jds
         ],
     }
 
+
 # ======================================================
-# 🆕 RESUME UPLOAD + AI PARSING
+# RESUME UPLOAD + AI PARSING
 # ======================================================
 @app.post("/api/resume/upload/{register_number}")
 async def upload_resume(
     register_number: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    # Students can only upload their own resume
+    if current_user["role"] == "Student":
+        if current_user.get("register_number") != register_number:
+            raise HTTPException(status_code=403, detail="You can only upload your own resume")
+
     student = db.query(models.Student).filter(
         models.Student.register_number == register_number
     ).first()
@@ -829,8 +745,6 @@ async def upload_resume(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # ---- Update student record with parsed data ----
-    # Merge existing + new skills
     existing_skills = set()
     if student.skills:
         existing_skills = set(s.strip() for s in student.skills.split(",") if s.strip())
@@ -861,18 +775,14 @@ async def upload_resume(
 
 
 # ======================================================
-# 🆕 AI SHORTLISTING — Rank students for a JD
+# AI SHORTLISTING
 # ======================================================
 @app.post("/api/match/ai-shortlist/{jd_id}")
-def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
-    """
-    AI-powered shortlisting engine.
-    Scores each student on:
-      - Skill match % (0-60 points)
-      - CGPA weight (0-25 points)
-      - Readiness score (0-15 points)
-    Returns ranked list with recommendation tiers.
-    """
+def ai_shortlist(
+    jd_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["Placement Officer", "Admin", "Recruiter"])),
+):
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
     if not jd:
         raise HTTPException(status_code=404, detail="JD not found")
@@ -887,23 +797,19 @@ def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
     for student in students:
         student_skills = [s.strip().lower() for s in (student.skills or "").split(",") if s.strip()]
 
-        # ---- 1. Skill match (60 points max) ----
         matched = [s for s in jd_skills if s in student_skills]
         missing = [s for s in jd_skills if s not in student_skills]
         skill_match_pct = (len(matched) / len(jd_skills)) * 100 if jd_skills else 0
         skill_score = (skill_match_pct / 100) * 60
 
-        # ---- 2. CGPA weight (25 points max) ----
         cgpa = student.cgpa or 0
         cgpa_score = min(25, (cgpa / 10) * 25)
 
-        # ---- 3. Readiness score (15 points max) ----
         readiness = max(0, 100 - (len(missing) * 20))
         readiness_score = (readiness / 100) * 15
 
         total = round(skill_score + cgpa_score + readiness_score, 1)
 
-        # ---- Recommendation tier ----
         if total >= 80 and len(missing) == 0:
             tier = "Strongly Recommended"
         elif total >= 65:
@@ -927,10 +833,7 @@ def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
             "tier": tier,
         })
 
-    # Sort by AI score descending
     ranked.sort(key=lambda x: x["ai_score"], reverse=True)
-
-    # Only include Recommendable candidates in the top list
     recommended = [r for r in ranked if r["tier"] in ("Strongly Recommended", "Recommended")]
 
     return {
@@ -944,10 +847,10 @@ def ai_shortlist(jd_id: int, db: Session = Depends(get_db)):
         "all_ranked": ranked,
     }
 
-# ======================================================
-# 🆕 RECRUITER SHORTLIST — Pipeline Management
-# ======================================================
 
+# ======================================================
+# RECRUITER SHORTLIST — Pipeline
+# ======================================================
 VALID_STAGES = ["Shortlisted", "Assessment", "Interview", "Selected", "Rejected"]
 
 
@@ -955,19 +858,13 @@ VALID_STAGES = ["Shortlisted", "Assessment", "Interview", "Selected", "Rejected"
 def add_to_shortlist(
     payload: schemas.ShortlistCreate,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Recruiter", "Placement Officer", "Admin", "HOD/Admin"])),
 ):
-    allowed = ["Recruiter", "Placement Officer", "Admin"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     student = db.query(models.Student).filter(models.Student.id == payload.student_id).first()
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == payload.jd_id).first()
     if not student or not jd:
         raise HTTPException(status_code=404, detail="Student or JD not found")
 
-    # Prevent duplicate entries
     existing = db.query(models.Shortlist).filter(
         models.Shortlist.student_id == payload.student_id,
         models.Shortlist.jd_id == payload.jd_id,
@@ -975,12 +872,10 @@ def add_to_shortlist(
     if existing:
         raise HTTPException(status_code=400, detail="Student already in shortlist for this JD")
 
-    recruiter_id = int(x_user_id) if x_user_id and x_user_id.isdigit() else None
-
     entry = models.Shortlist(
         student_id=payload.student_id,
         jd_id=payload.jd_id,
-        recruiter_id=recruiter_id,
+        recruiter_id=current_user["id"],
         stage="Shortlisted",
         notes=payload.notes or "",
     )
@@ -1009,12 +904,8 @@ def add_to_shortlist(
 def get_shortlist(
     jd_id: int,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Recruiter", "Placement Officer", "Admin", "HOD/Admin"])),
 ):
-    allowed = ["Recruiter", "Placement Officer", "Admin"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     entries = db.query(models.Shortlist).filter(models.Shortlist.jd_id == jd_id).all()
 
     result = []
@@ -1036,18 +927,12 @@ def get_shortlist(
             "created_at": e.created_at,
         })
 
-    # Group by stage for Kanban
     grouped = {stage: [] for stage in VALID_STAGES}
     for item in result:
         if item["stage"] in grouped:
             grouped[item["stage"]].append(item)
 
-    return {
-        "jd_id": jd_id,
-        "total": len(result),
-        "grouped": grouped,
-        "all": result,
-    }
+    return {"jd_id": jd_id, "total": len(result), "grouped": grouped, "all": result}
 
 
 @app.patch("/api/recruiter/shortlist/{shortlist_id}")
@@ -1055,12 +940,8 @@ def update_shortlist(
     shortlist_id: int,
     payload: schemas.ShortlistUpdate,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Recruiter", "Placement Officer", "Admin", "HOD/Admin"])),
 ):
-    allowed = ["Recruiter", "Placement Officer", "Admin"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     entry = db.query(models.Shortlist).filter(models.Shortlist.id == shortlist_id).first()
     if not entry:
         raise HTTPException(status_code=404, detail="Shortlist entry not found")
@@ -1082,12 +963,8 @@ def update_shortlist(
 def remove_from_shortlist(
     shortlist_id: int,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Recruiter", "Placement Officer", "Admin", "HOD/Admin"])),
 ):
-    allowed = ["Recruiter", "Placement Officer", "Admin"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     entry = db.query(models.Shortlist).filter(models.Shortlist.id == shortlist_id).first()
     if not entry:
         raise HTTPException(status_code=404, detail="Not found")
@@ -1101,17 +978,8 @@ def remove_from_shortlist(
 def available_candidates(
     jd_id: int,
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["Recruiter", "Placement Officer", "Admin", "HOD/Admin"])),
 ):
-    """
-    Returns students NOT yet in the shortlist for this JD,
-    ranked by AI score.
-    """
-    allowed = ["Recruiter", "Placement Officer", "Admin"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # Get already-shortlisted student IDs
     shortlisted_ids = {
         s.student_id for s in
         db.query(models.Shortlist).filter(models.Shortlist.jd_id == jd_id).all()
@@ -1153,28 +1021,23 @@ def available_candidates(
     available.sort(key=lambda x: x["ai_score"], reverse=True)
     return {"jd_id": jd_id, "available": available}
 
+
 # ======================================================
-# 🆕 HOD DEPARTMENT DASHBOARD
+# HOD DEPARTMENT DASHBOARD
 # ======================================================
 @app.get("/api/hod/department-stats")
 def hod_department_stats(
     db: Session = Depends(get_db),
-    x_user_role: Optional[str] = Header(None),
-    x_user_department: Optional[str] = Header(None),
+    current_user: dict = Depends(require_roles(["HOD/Admin", "Admin", "Faculty/Trainer", "Placement Officer"])),
 ):
-    """
-    Returns HOD-scoped statistics for their own department only.
-    """
-    allowed = ["HOD/Admin", "Admin", "Faculty/Trainer", "Placement Officer"]
-    if x_user_role not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    x_user_role = current_user["role"]
+    x_user_department = current_user.get("department")
 
     if not x_user_department and x_user_role != "Admin":
         raise HTTPException(status_code=400, detail="No department assigned to your account")
 
     dept = (x_user_department or "").upper()
 
-    # Filter students by department (Admin sees all)
     if x_user_role == "Admin":
         students = db.query(models.Student).all()
     else:
@@ -1184,7 +1047,6 @@ def hod_department_stats(
 
     total_students = len(students)
 
-    # Skill gap analysis for this department
     all_skills = {}
     for s in students:
         for skill in (s.skills or "").split(","):
@@ -1192,13 +1054,9 @@ def hod_department_stats(
             if skill:
                 all_skills[skill] = all_skills.get(skill, 0) + 1
 
-    # Top skills present
     top_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)[:10]
-
-    # Students with no skills (need attention)
     no_skills_count = sum(1 for s in students if not s.skills or not s.skills.strip())
 
-    # Recent imports for this department
     recent_imports_q = db.query(models.ImportHistory).filter(
         models.ImportHistory.department == dept
     ).order_by(models.ImportHistory.uploaded_at.desc()).limit(5).all()
@@ -1216,7 +1074,6 @@ def hod_department_stats(
         for h in recent_imports_q
     ]
 
-    # CGPA distribution
     cgpa_ranges = {"9-10": 0, "8-9": 0, "7-8": 0, "6-7": 0, "<6": 0}
     for s in students:
         c = s.cgpa or 0
@@ -1226,7 +1083,6 @@ def hod_department_stats(
         elif c >= 6: cgpa_ranges["6-7"] += 1
         else: cgpa_ranges["<6"] += 1
 
-    # Batch distribution
     batch_dist = {}
     for s in students:
         b = s.batch or "Unknown"
@@ -1244,4 +1100,22 @@ def hod_department_stats(
         "cgpa_distribution": cgpa_ranges,
         "batch_distribution": batch_dist,
         "recent_imports": recent_imports,
+    }
+
+
+# ======================================================
+# TEMPLATE INFO
+# ======================================================
+@app.get("/api/import/template-info")
+def template_info():
+    return {
+        "columns": ["Name", "Register Number", "Email", "CGPA", "Department"],
+        "example": {
+            "Name": "Arun Kumar",
+            "Register Number": "23AD001",
+            "Email": "arun@college.edu",
+            "CGPA": 8.2,
+            "Department": "AIDS",
+        },
+        "supported_departments": ["AIDS", "CSE", "ECE", "MECH", "CIVIL", "IT"],
     }

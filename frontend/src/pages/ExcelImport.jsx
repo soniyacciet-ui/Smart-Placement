@@ -84,7 +84,7 @@ const ExcelImport = () => {
     setLoading(true);
     setError('');
     try {
-      const data = await previewExcelImport(file, department, user.role, user.department);
+      const data = await previewExcelImport(file, department);
       setPreview(data);
     } catch (err) {
       setError(err.message);
@@ -124,7 +124,7 @@ const ExcelImport = () => {
     setClearing(true);
     setError('');
     try {
-      const res = await clearDepartmentStudents(department, user.role, user.department);
+      const res = await clearDepartmentStudents(department);
       alert(`✅ ${res.message}`);
       setPreview(null);
       setResult(null);

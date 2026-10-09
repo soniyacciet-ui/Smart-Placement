@@ -1,17 +1,42 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // ============================================
-// HELPER
+// AUTH HELPERS
+// ============================================
+export const getToken = () => localStorage.getItem('drivex_token');
+export const setToken = (token) => localStorage.setItem('drivex_token', token);
+export const clearToken = () => localStorage.removeItem('drivex_token');
+
+const authHeaders = () => {
+  const token = getToken();
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+};
+
+// ============================================
+// CENTRAL FETCH — auto-adds JWT
 // ============================================
 const apiFetch = async (path, options = {}) => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+      ...(options.headers || {}),
+    },
   });
+
+  if (response.status === 401) {
+    // Token expired — log out
+    clearToken();
+    window.location.href = '/';
+    throw new Error('Session expired. Please log in again.');
+  }
+
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`API Error ${response.status}: ${error}`);
   }
+
   return response.json();
 };
 
@@ -30,189 +55,134 @@ export const testBackendConnection = async () => {
 };
 
 // ============================================
-// MATCHING (existing — unchanged)
+// MATCHING
 // ============================================
 export const mockRunMatching = async (jd, students) => {
-  try {
-    const createdJD = await apiFetch('/api/jd/upload', {
-      method: 'POST',
-      body: JSON.stringify(jd),
-    });
-
-    await apiFetch(`/api/match/run/${createdJD.id}`, { method: 'POST' });
-    const segments = await apiFetch(`/api/match/${createdJD.id}/segments`);
-
-    return segments.map(s => ({
-      ...s,
-      missingSkills: s.missing_skills,
-      readinessScore: s.readiness_score,
-    }));
-  } catch (error) {
-    console.error('❌ Backend connection failed:', error);
-    throw error;
-  }
+  const createdJD = await apiFetch('/api/jd/upload', {
+    method: 'POST',
+    body: JSON.stringify(jd),
+  });
+  await apiFetch(`/api/match/run/${createdJD.id}`, { method: 'POST' });
+  const segments = await apiFetch(`/api/match/${createdJD.id}/segments`);
+  return segments.map(s => ({
+    ...s,
+    missingSkills: s.missing_skills,
+    readinessScore: s.readiness_score,
+  }));
 };
 
 // ============================================
-// RECOVERY (existing — unchanged)
+// RECOVERY
 // ============================================
 export const mockRunRecovery = async (matchResults, jdId = 1) => {
-  try {
-    const response = await apiFetch(`/api/recovery/run/${jdId}`, { method: 'POST' });
-    const updatedResults = matchResults.map(student => {
-      const serverResult = response.results.find(r => r.id === student.id);
-      if (!serverResult) return student;
-      return {
-        ...student,
-        status: serverResult.status,
-        readinessScore: serverResult.readiness_score,
-        recovered: serverResult.recovered,
-        originalStatus: serverResult.original_status,
-      };
-    });
-    return updatedResults;
-  } catch (error) {
-    console.error('❌ Recovery failed:', error);
-    throw error;
-  }
+  const response = await apiFetch(`/api/recovery/run/${jdId}`, { method: 'POST' });
+  return matchResults.map(student => {
+    const serverResult = response.results.find(r => r.id === student.id);
+    if (!serverResult) return student;
+    return {
+      ...student,
+      status: serverResult.status,
+      readinessScore: serverResult.readiness_score,
+      recovered: serverResult.recovered,
+      originalStatus: serverResult.original_status,
+    };
+  });
 };
 
 // ============================================
-// SIMULATOR (existing — unchanged)
+// SIMULATOR
 // ============================================
 export const mockRunSimulator = async (selectedInterventionIds, matchResults, interventions, jdId = 1) => {
-  try {
-    const response = await apiFetch('/api/simulator/run', {
-      method: 'POST',
-      body: JSON.stringify({
-        jd_id: jdId,
-        selected_intervention_ids: selectedInterventionIds,
-      }),
-    });
-
-    const transformedResults = matchResults.map(student => {
-      const sim = response.results.find(r => r.id === student.id);
-      if (!sim) return { ...student, moveToReady: false };
-      return {
-        ...student,
-        simulatedScore: sim.simulated_score,
-        moveToReady: sim.move_to_ready,
-      };
-    });
-
-    return { results: transformedResults, totalMoved: response.total_moved };
-  } catch (error) {
-    console.error('❌ Simulator failed:', error);
-    throw error;
-  }
+  const response = await apiFetch('/api/simulator/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      jd_id: jdId,
+      selected_intervention_ids: selectedInterventionIds,
+    }),
+  });
+  const transformedResults = matchResults.map(student => {
+    const sim = response.results.find(r => r.id === student.id);
+    if (!sim) return { ...student, moveToReady: false };
+    return {
+      ...student,
+      simulatedScore: sim.simulated_score,
+      moveToReady: sim.move_to_ready,
+    };
+  });
+  return { results: transformedResults, totalMoved: response.total_moved };
 };
 
 // ============================================
-// OPTIMIZER (existing — unchanged)
+// OPTIMIZER
 // ============================================
 export const mockRunOptimizer = async (constraints, matchResults, interventions, jdId = 1) => {
-  try {
-    const response = await apiFetch('/api/optimizer/run', {
-      method: 'POST',
-      body: JSON.stringify({
-        jd_id: jdId,
-        max_budget: constraints.maxBudget,
-        max_trainers: constraints.maxTrainers,
-      }),
-    });
-    return {
-      recommendedPlan: response.recommended_plan,
-      totalCost: response.total_cost,
-      totalTrainers: response.total_trainers,
-    };
-  } catch (error) {
-    console.error('❌ Optimizer failed:', error);
-    throw error;
-  }
+  const response = await apiFetch('/api/optimizer/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      jd_id: jdId,
+      max_budget: constraints.maxBudget,
+      max_trainers: constraints.maxTrainers,
+    }),
+  });
+  return {
+    recommendedPlan: response.recommended_plan,
+    totalCost: response.total_cost,
+    totalTrainers: response.total_trainers,
+  };
 };
 
 // ============================================
-// 🆕 STUDENTS
+// STUDENTS
 // ============================================
-export const fetchStudents = async () => {
-  return await apiFetch('/api/students');
-};
-
-export const fetchMyProfile = async (registerNumber) => {
-  return await apiFetch(`/api/students/me/${registerNumber}`);
-};
+export const fetchStudents = async () => await apiFetch('/api/students');
+export const fetchMyProfile = async (registerNumber) => await apiFetch(`/api/students/me/${registerNumber}`);
 
 // ============================================
-// 🆕 ADMIN — USER MANAGEMENT
+// ADMIN — USER MANAGEMENT
 // ============================================
-export const createUser = async (userData, adminRole = 'Admin') => {
+export const createUser = async (userData) => {
   return await apiFetch('/api/admin/users', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': adminRole,
-    },
     body: JSON.stringify(userData),
   });
 };
 
-export const listUsers = async (filters = {}, adminRole = 'Admin') => {
+export const listUsers = async (filters = {}) => {
   const params = new URLSearchParams();
   if (filters.role) params.append('role', filters.role);
   if (filters.department) params.append('department', filters.department);
   if (filters.status) params.append('status', filters.status);
-
   const query = params.toString() ? `?${params.toString()}` : '';
-  return await apiFetch(`/api/admin/users${query}`, {
-    headers: { 'x-user-role': adminRole },
-  });
+  return await apiFetch(`/api/admin/users${query}`);
 };
 
-export const toggleUserStatus = async (userId, status, adminRole = 'Admin') => {
+export const toggleUserStatus = async (userId, status) => {
   return await apiFetch(`/api/admin/users/${userId}/status`, {
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': adminRole,
-    },
     body: JSON.stringify({ status }),
   });
 };
 
-export const resetUserPassword = async (userId, newPassword, adminRole = 'Admin') => {
+export const resetUserPassword = async (userId, newPassword) => {
   return await apiFetch(`/api/admin/users/${userId}/reset-password`, {
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': adminRole,
-    },
     body: JSON.stringify({ new_password: newPassword }),
   });
 };
 
-// ============================================
-// 🆕 ADMIN — DASHBOARD STATS
-// ============================================
-export const fetchAdminStats = async (adminRole = 'Admin') => {
-  return await apiFetch('/api/admin/stats', {
-    headers: { 'x-user-role': adminRole },
-  });
-};
+export const fetchAdminStats = async () => await apiFetch('/api/admin/stats');
 
 // ============================================
-// 🆕 EXCEL IMPORT
+// EXCEL IMPORT
 // ============================================
-export const previewExcelImport = async (file, department, userRole, userDept) => {
+export const previewExcelImport = async (file, department) => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('department', department);
 
   const response = await fetch(`${API_BASE_URL}/api/import/preview`, {
     method: 'POST',
-    headers: {
-      'x-user-role': userRole,
-      'x-user-department': userDept || '',
-    },
+    headers: authHeaders(), // NO Content-Type — browser sets multipart boundary
     body: formData,
   });
 
@@ -223,80 +193,51 @@ export const previewExcelImport = async (file, department, userRole, userDept) =
   return await response.json();
 };
 
-export const confirmExcelImport = async (token, fileName, userRole, userDept, userId) => {
-  const response = await fetch(`${API_BASE_URL}/api/import/confirm`, {
+export const confirmExcelImport = async (token, fileName) => {
+  return await apiFetch('/api/import/confirm', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': userRole,
-      'x-user-department': userDept || '',
-      'x-user-id': userId || '',
-    },
     body: JSON.stringify({ token, file_name: fileName }),
   });
+};
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Import failed: ${error}`);
-  }
+export const fetchImportHistory = async () => await apiFetch('/api/import/history');
+export const fetchTemplateInfo = async () => await apiFetch('/api/import/template-info');
+
+// ============================================
+// DELETE OPERATIONS
+// ============================================
+export const clearDepartmentStudents = async (department) => {
+  return await apiFetch(`/api/import/clear-department/${department}`, { method: 'DELETE' });
+};
+
+export const deleteImportHistoryRecord = async (historyId) => {
+  return await apiFetch(`/api/import/history/${historyId}`, { method: 'DELETE' });
+};
+
+// ============================================
+// RESUME UPLOAD
+// ============================================
+export const uploadResume = async (registerNumber, file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/resume/upload/${registerNumber}`,
+    { method: 'POST', headers: authHeaders(), body: formData }
+  );
+  if (!response.ok) throw new Error(await response.text());
   return await response.json();
 };
 
-export const fetchImportHistory = async (userRole, userDept) => {
-  return await apiFetch('/api/import/history', {
-    headers: {
-      'x-user-role': userRole,
-      'x-user-department': userDept || '',
-    },
-  });
-};
-
-export const fetchTemplateInfo = async () => {
-  return await apiFetch('/api/import/template-info');
+// ============================================
+// AI SHORTLIST
+// ============================================
+export const getAIShortlist = async (jdId) => {
+  return await apiFetch(`/api/match/ai-shortlist/${jdId}`, { method: 'POST' });
 };
 
 // ============================================
-// 🆕 DELETE OPERATIONS
-// ============================================
-export const deleteDepartmentStudents = async (department, adminRole = 'Admin') => {
-  return await apiFetch(`/api/admin/students/department/${department}`, {
-    method: 'DELETE',
-    headers: { 'x-user-role': adminRole },
-  });
-};
-
-export const deleteImportHistory = async (historyId, adminRole = 'Admin') => {
-  return await apiFetch(`/api/admin/import-history/${historyId}`, {
-    method: 'DELETE',
-    headers: { 'x-user-role': adminRole },
-  });
-};
-
-// ============================================
-// 🆕 CLEAR DEPARTMENT STUDENTS (Staff + Admin)
-// ============================================
-export const clearDepartmentStudents = async (department, userRole, userDept) => {
-  return await apiFetch(`/api/import/clear-department/${department}`, {
-    method: 'DELETE',
-    headers: {
-      'x-user-role': userRole,
-      'x-user-department': userDept || '',
-    },
-  });
-};
-
-export const deleteImportHistoryRecord = async (historyId, userRole, userDept) => {
-  return await apiFetch(`/api/import/history/${historyId}`, {
-    method: 'DELETE',
-    headers: {
-      'x-user-role': userRole,
-      'x-user-department': userDept || '',
-    },
-  });
-};
-
-// ============================================
-// 🆕 GLOBAL SEARCH
+// GLOBAL SEARCH
 // ============================================
 export const globalSearch = async (query) => {
   if (!query || query.trim().length < 2) {
@@ -306,59 +247,39 @@ export const globalSearch = async (query) => {
 };
 
 // ============================================
-// 🆕 RECRUITER SHORTLIST
+// HOD DASHBOARD
 // ============================================
-export const addToShortlist = async (studentId, jdId, notes = '', userRole, userId) => {
+export const getHodDepartmentStats = async () => {
+  return await apiFetch('/api/hod/department-stats');
+};
+
+// ============================================
+// RECRUITER SHORTLIST
+// ============================================
+export const addToShortlist = async (studentId, jdId, notes = '') => {
   return await apiFetch('/api/recruiter/shortlist', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': userRole,
-      'x-user-id': userId?.toString() || '',
-    },
     body: JSON.stringify({ student_id: studentId, jd_id: jdId, notes }),
   });
 };
 
-export const getShortlist = async (jdId, userRole) => {
-  return await apiFetch(`/api/recruiter/shortlist/${jdId}`, {
-    headers: { 'x-user-role': userRole },
-  });
+export const getShortlist = async (jdId) => {
+  return await apiFetch(`/api/recruiter/shortlist/${jdId}`);
 };
 
-export const updateShortlistStage = async (shortlistId, stage, userRole, notes = null) => {
+export const updateShortlistStage = async (shortlistId, stage, notes = null) => {
   const body = { stage };
   if (notes !== null) body.notes = notes;
   return await apiFetch(`/api/recruiter/shortlist/${shortlistId}`, {
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-role': userRole,
-    },
     body: JSON.stringify(body),
   });
 };
 
-export const removeFromShortlist = async (shortlistId, userRole) => {
-  return await apiFetch(`/api/recruiter/shortlist/${shortlistId}`, {
-    method: 'DELETE',
-    headers: { 'x-user-role': userRole },
-  });
+export const removeFromShortlist = async (shortlistId) => {
+  return await apiFetch(`/api/recruiter/shortlist/${shortlistId}`, { method: 'DELETE' });
 };
 
-export const getAvailableCandidates = async (jdId, userRole) => {
-  return await apiFetch(`/api/recruiter/shortlist-available/${jdId}`, {
-    headers: { 'x-user-role': userRole },
-  });
-};
-// ============================================
-// 🆕 HOD DASHBOARD
-// ============================================
-export const getHodDepartmentStats = async (userRole, userDepartment) => {
-  return await apiFetch('/api/hod/department-stats', {
-    headers: {
-      'x-user-role': userRole,
-      'x-user-department': userDepartment || '',
-    },
-  });
+export const getAvailableCandidates = async (jdId) => {
+  return await apiFetch(`/api/recruiter/shortlist-available/${jdId}`);
 };

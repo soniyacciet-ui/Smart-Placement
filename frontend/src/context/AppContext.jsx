@@ -1,4 +1,20 @@
 import React, { createContext, useState, useContext } from 'react';
+  // Restore user from localStorage on refresh
+  React.useEffect(() => {
+    const savedUser = localStorage.getItem('drivex_user');
+    if (savedUser) {
+      try { setUser(JSON.parse(savedUser)); } catch (e) {}
+    }
+  }, []);
+
+  // Persist user whenever it changes
+  React.useEffect(() => {
+    if (user) {
+      localStorage.setItem('drivex_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('drivex_user');
+    }
+  }, [user]);
 
 const AppContext = createContext();
 
